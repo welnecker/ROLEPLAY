@@ -35,6 +35,31 @@ def _montar_historico(usuario: str, limite_tokens: int = 120_000) -> List[Dict[s
     return list(reversed(out)) if out else HISTORY_BOOT[:]
 
 
+def _pos_processar_seguro(texto: str, max_frases_por_par: int = 3) -> str:
+    """
+    Executa o pipeline de regex com saneamento prévio de barras invertidas.
+    Se algo falhar, tenta uma segunda vez e, no pior caso, retorna o texto original.
+    """
+    if not texto:
+        return texto
+
+    # 1) Sanear barras antes de regex
+    s = texto.replace("\\", "\\\\")
+    try:
+        s = strip_metacena(s)
+        s = formatar_roleplay_profissional(s, max_frases_por_par=max_frases_por_par)
+        # 2) Restaurar barras para exibição
+        return s.replace("\\\\", "\\")
+    except ReError:
+        # Tentativa extra (rara). Se falhar, volta o original sem tocar.
+        try:
+            s2 = strip_metacena(s)
+            s2 = formatar_roleplay_profissional(s2, max_frases_por_par=max_frases_por_par)
+            return s2.replace("\\\\", "\\")
+        except ReError:
+            return texto
+
+
 def gerar_resposta(usuario: str, prompt_usuario: str, model: str) -> str:
     """
     Gera a resposta via OpenRouter, aplica pós-processamentos seguros,
@@ -81,20 +106,8 @@ def gerar_resposta(usuario: str, prompt_usuario: str, model: str) -> str:
         data2 = chat(payload_retry)
         resposta = (data2.get("choices", [{}])[0].get("message", {}) or {}).get("content", "") or resposta
 
-    # 5) Pós-processamento SEGURO contra escapes inválidos (\c, \x, etc.)
-    try:
-        resposta = strip_metacena(resposta)
-        resposta = formatar_roleplay_profissional(resposta, max_frases_por_par=3)
-    except ReError:
-        # Neutraliza barras e tenta novamente
-        safe = (resposta or "").replace("\\", "\\\\")
-        try:
-            safe = strip_metacena(safe)
-            safe = formatar_roleplay_profissional(safe, max_frases_por_par=3)
-            resposta = safe
-        except ReError:
-            # No pior caso, retorna sem pós-processo
-            pass
+    # 5) Pós-processamento SEGURO (com saneamento de \ antes da regex)
+    resposta = _pos_processar_seguro(resposta, max_frases_por_par=3)
 
     # 6) Persistir
     save_interaction(usuario, prompt_usuario, resposta, model)
