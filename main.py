@@ -42,12 +42,36 @@ except Exception:
     def nsfw_enabled(_user: str) -> bool:
         return False
 
-# Inferência de local: usamos infer_from_prompt e damos alias para infer_location
+# Inferência de local
 try:
     from core.locations import infer_from_prompt as infer_location
 except Exception:
     def infer_location(_prompt: str) -> Optional[str]:
         return None
+
+# --- helpers ---
+def _rerun():
+    # compat: Streamlit >= 1.27 usa st.rerun()
+    if hasattr(st, "rerun"):
+        st.rerun()
+    else:
+        st.experimental_rerun()
+
+def _reload_history(user: str):
+    """Recarrega histórico do Mongo para o usuário (ordem cronológica)."""
+    st.session_state["history"] = []
+    try:
+        docs = get_history_docs(user)
+        for d in docs:
+            u = (d.get("mensagem_usuario") or "").strip()
+            a = (d.get("resposta_mary") or "").strip()
+            if u:
+                st.session_state["history"].append(("user", u))
+            if a:
+                st.session_state["history"].append(("assistant", a))
+    except Exception as e:
+        st.sidebar.warning(f"Não foi possível carregar o histórico: {e}")
+    st.session_state["history_loaded_for"] = user
 
 # --- página ---
 st.set_page_config(page_title="Roleplay | Mary Massariol", layout="centered")
@@ -58,45 +82,33 @@ st.session_state.setdefault("usuario", "welnecker")
 st.session_state.setdefault("modelo", "deepseek/deepseek-chat-v3-0324")
 st.session_state.setdefault("history", [])               # type: List[Tuple[str, str]]
 st.session_state.setdefault("history_loaded_for", None)  # evita recarregar no rerun
+st.session_state.setdefault("auto_loc", True)            # inferência automática do local
 
 # --- controles de topo ---
 st.text_input("👤 Usuário", key="usuario")
-st.selectbox(
-    "🧠 Modelo",
-    [
-        "deepseek/deepseek-chat-v3-0324",
-        "anthropic/claude-3.5-haiku",
-        "thedrummer/anubis-70b-v1.1",
-        "qwen/qwen3-max",
-        "nousresearch/hermes-3-llama-3.1-405b",
 
-        # ✅ Together (exemplos; ajuste para os slugs que você usa na Together)
-        "together/meta-llama/Meta-Llama-3.1-405B-Instruct-Turbo",
-        "together/Qwen/Qwen2.5-72B-Instruct",
-        "together/google/gemma-2-27b-it",
-    ],
-    key="modelo",
-)
+# Lista de modelos (sem fallback automático para OpenRouter)
+MODEL_OPTIONS = [
+    # OpenRouter
+    "deepseek/deepseek-chat-v3-0324",
+    "anthropic/claude-3.5-haiku",
+    "thedrummer/anubis-70b-v1.1",
+    "qwen/qwen3-max",
+    "nousresearch/hermes-3-llama-3.1-405b",
 
+    # Together (use exatamente estes slugs na sua conta Together)
+    "together/meta-llama/Meta-Llama-3.1-405B-Instruct-Turbo",
+    "together/Qwen/Qwen2.5-72B-Instruct",
+    "together/google/gemma-2-27b-it",
+]
+st.selectbox("🧠 Modelo", MODEL_OPTIONS, key="modelo")
 
 usuario = st.session_state["usuario"]
+modelo  = st.session_state["modelo"]
 
 # --- carregar histórico do Mongo por usuário (uma vez por troca de usuário) ---
 if st.session_state["history_loaded_for"] != usuario:
-    st.session_state["history"] = []
-    try:
-        docs = get_history_docs(usuario)
-        # docs já vêm em ordem cronológica (asc) no repositório
-        for d in docs:
-            u = (d.get("mensagem_usuario") or "").strip()
-            a = (d.get("resposta_mary") or "").strip()
-            if u:
-                st.session_state["history"].append(("user", u))
-            if a:
-                st.session_state["history"].append(("assistant", a))
-    except Exception as e:
-        st.sidebar.warning(f"Não foi possível carregar o histórico: {e}")
-    st.session_state["history_loaded_for"] = usuario
+    _reload_history(usuario)
 
 # --- sidebar (status) ---
 try:
@@ -105,31 +117,38 @@ except Exception:
     local_atual = "—"
 
 nsfw_badge = "✅ Liberado" if nsfw_enabled(usuario) else "🔒 Bloqueado"
+provider = "Together" if modelo.startswith("together/") else "OpenRouter"
+
 st.sidebar.markdown(f"**NSFW:** {nsfw_badge}")
 st.sidebar.caption(f"Local atual: {local_atual}")
+st.sidebar.caption(f"Provedor: **{provider}**")
+
+st.sidebar.markdown("---")
+st.session_state["auto_loc"] = st.sidebar.checkbox("📍 Inferir local automaticamente", value=st.session_state["auto_loc"])
 
 # --- sidebar (manutenção) ---
-st.sidebar.markdown("---")
 st.sidebar.subheader("🧹 Manutenção")
-
 colA, colB = st.sidebar.columns(2)
+
 if colA.button("🔄 Resetar histórico"):
     try:
         delete_user_history(usuario)
         st.session_state["history"] = []
+        st.session_state["history_loaded_for"] = None
         st.sidebar.success("Histórico apagado.")
+        _rerun()
     except Exception as e:
         st.sidebar.error(f"Falha ao resetar histórico: {e}")
 
 if colB.button("⏪ Apagar último turno"):
     try:
-        delete_last_interaction(usuario)
-        # Remove da UI os últimos 2 registros (user + assistant), se existirem
-        if len(st.session_state["history"]) >= 2:
-            st.session_state["history"] = st.session_state["history"][:-2]
+        ok = delete_last_interaction(usuario)
+        if ok:
+            _reload_history(usuario)
+            st.sidebar.info("Último turno apagado.")
+            _rerun()
         else:
-            st.session_state["history"] = []
-        st.sidebar.info("Último turno apagado.")
+            st.sidebar.warning("Não havia interações para apagar.")
     except Exception as e:
         st.sidebar.error(f"Falha ao apagar último turno: {e}")
 
@@ -139,14 +158,15 @@ if st.sidebar.button("🧨 Apagar TUDO (chat + memórias)"):
         st.session_state["history"] = []
         st.session_state["history_loaded_for"] = None
         st.sidebar.success("Tudo apagado para este usuário.")
+        _rerun()
     except Exception as e:
         st.sidebar.error(f"Falha ao apagar tudo: {e}")
 
-# opcional: volta a bloquear NSFW
 if st.sidebar.button("🔒 Forçar NSFW OFF"):
     try:
         reset_nsfw(usuario)
         st.sidebar.success("NSFW desativado para este usuário.")
+        _rerun()
     except Exception as e:
         st.sidebar.error(f"Falha ao forçar NSFW OFF: {e}")
 
@@ -167,17 +187,18 @@ if prompt := st.chat_input("Envie sua mensagem para Mary"):
     st.session_state["history"].append(("user", prompt))
 
     # inferir/fixar local automaticamente (se possível)
-    try:
-        loc = infer_location(prompt)
-        if loc:
-            set_fact(usuario, "local_cena_atual", loc, {"fonte": "ui/auto"})
-    except Exception:
-        pass
+    if st.session_state["auto_loc"]:
+        try:
+            loc = infer_location(prompt)
+            if loc:
+                set_fact(usuario, "local_cena_atual", loc, {"fonte": "ui/auto"})
+        except Exception:
+            pass
 
-    # gerar resposta (service já persiste no Mongo)
+    # gerar resposta (o service faz o roteamento de provedor; NÃO faz fallback automático)
     with st.spinner("Gerando..."):
         try:
-            resposta = gerar_resposta(usuario, prompt, model=st.session_state["modelo"])
+            resposta = gerar_resposta(usuario, prompt, model=modelo)
         except Exception as e:
             resposta = f"Erro ao gerar resposta: {e}"
 
