@@ -69,9 +69,15 @@ st.selectbox(
         "thedrummer/anubis-70b-v1.1",
         "qwen/qwen3-max",
         "nousresearch/hermes-3-llama-3.1-405b",
+
+        # ✅ Together (exemplos; ajuste para os slugs que você usa na Together)
+        "together/meta-llama/Llama-3.1-70B-Instruct-Turbo",
+        "together/Qwen/Qwen2.5-72B-Instruct",
+        "together/google/gemma-2-27b-it",
     ],
     key="modelo",
 )
+
 
 usuario = st.session_state["usuario"]
 
