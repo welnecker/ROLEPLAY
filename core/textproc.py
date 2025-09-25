@@ -1,47 +1,60 @@
 # core/textproc.py
+from __future__ import annotations
 import re
-from typing import List
 
-# ---------- utilidades seguras ----------
-_WHITESPACE_RE = re.compile(r"\s+")
-
-def _normalize_spaces(text: str) -> str:
-    return _WHITESPACE_RE.sub(" ", (text or "").strip())
+# Split de frases seguro (não usa replacement)
+_SENT_SPLIT = re.compile(r'(?<=[.!?…])\s+')
 
 def strip_metacena(text: str) -> str:
     """
-    Remove marcadores de 'metacena' no início da linha, como:
-    (sorrio) ou [olho pra você]. Replacement é CONSTANTE -> sem risco de '\c'.
+    Remove marcas de metacena no INÍCIO das linhas, como:
+    (sorri) ...  ou  [olha para ele] ...
+    Faz isso sem usar re.sub com replacement interpretável.
     """
-    out_lines: List[str] = []
-    for ln in (text or "").splitlines():
-        ln2 = re.sub(r"^\s*[\(\[][^\)\]]*[\)\]]\s*", "", ln)  # repl é "", constante
-        out_lines.append(ln2)
-    return "\n".join(out_lines).strip()
+    if not text:
+        return text
 
-def _to_sentences(text: str) -> List[str]:
-    """
-    Divide em frases sem usar replacement variável.
-    """
-    t = _normalize_spaces(text)
-    if not t:
-        return []
-    # Divide depois de . ! ? preservando a pontuação
-    parts = re.split(r"(?<=[.!?])\s+", t)
-    return [p.strip() for p in parts if p.strip()]
+    out_lines = []
+    for raw in text.splitlines():
+        ln = raw.lstrip()
+
+        # Se a linha começa com (...) ou [...]
+        if ln.startswith('(') or ln.startswith('['):
+            close = ln.find(')') if ln.startswith('(') else ln.find(']')
+            if close != -1:
+                ln = ln[close + 1 :].lstrip()
+
+        out_lines.append(ln)
+    return "\n".join(out_lines)
+
 
 def formatar_roleplay_profissional(text: str, max_frases_por_par: int = 3) -> str:
     """
-    Reorganiza em parágrafos curtos (até N frases).
-    NENHUM re.sub com replacement vindo do modelo.
+    Agrupa em parágrafos curtos (até N frases por parágrafo).
+    Não usa replacement com barras (evita 'bad escape \\c').
     """
-    sents = _to_sentences(text)
-    if not sents:
-        return text or ""
+    t = (text or "").strip()
+    if not t:
+        return t
 
-    paras: List[str] = []
-    for i in range(0, len(sents), max_frases_por_par):
-        chunk = " ".join(sents[i:i + max_frases_por_par])
-        paras.append(chunk)
+    # Normaliza espaços sem usar escapes em replacement
+    t = re.sub(r'[ \t]+', ' ', t)
 
-    return "\n\n".join(paras)
+    # Quebra em frases
+    frases = _SENT_SPLIT.split(t)
+
+    # Junta em blocos
+    saida: list[str] = []
+    buffer: list[str] = []
+    for f in frases:
+        f = f.strip()
+        if not f:
+            continue
+        buffer.append(f)
+        if len(buffer) >= max_frases_por_par:
+            saida.append(' '.join(buffer))
+            buffer = []
+    if buffer:
+        saida.append(' '.join(buffer))
+
+    return '\n\n'.join(saida)
