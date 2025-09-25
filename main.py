@@ -71,7 +71,7 @@ st.selectbox(
         "nousresearch/hermes-3-llama-3.1-405b",
 
         # ✅ Together (exemplos; ajuste para os slugs que você usa na Together)
-        "together/meta-llama/Llama-3.1-70B-Instruct-Turbo",
+        "together/meta-llama/Meta-Llama-3.1-405B-Instruct-Turbo",
         "together/Qwen/Qwen2.5-72B-Instruct",
         "together/google/gemma-2-27b-it",
     ],
