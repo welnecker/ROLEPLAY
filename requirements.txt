@@ -1,0 +1,4 @@
+streamlit>=1.31
+pymongo[srv]>=4.6
+dnspython>=2.4   # (vem com [srv], mas deixar explícito evita surpresas)
+requests>=2.31
