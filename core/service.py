@@ -77,3 +77,18 @@ def gerar_resposta(usuario: str, prompt_usuario: str, model: str) -> str:
 
     save_interaction(usuario, prompt_usuario, resposta, model)
     return resposta
+
+    try:
+    resposta = strip_metacena(resposta)
+    resposta = formatar_roleplay_profissional(resposta, max_frases_por_par=3)
+except ReError:
+    # Se vier lixo com barras, neutraliza e tenta de novo
+    safe = (resposta or "").replace("\\", "\\\\")
+    try:
+        safe = strip_metacena(safe)
+        safe = formatar_roleplay_profissional(safe, max_frases_por_par=3)
+        resposta = safe
+    except ReError:
+        # No pior caso, devolve sem pós-processar (não quebra o app)
+        pass
+
