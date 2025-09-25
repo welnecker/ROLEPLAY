@@ -3,6 +3,23 @@ from typing import Any, Dict, List
 from .database import get_col
 import re
 
+def delete_user_history(usuario: str):
+    col = get_col("mary_historia")
+    col.delete_many({"usuario": usuario})
+
+def delete_last_interaction(usuario: str):
+    col = get_col("mary_historia")
+    doc = col.find_one({"usuario": usuario}, sort=[("_id", -1)])
+    if doc:
+        col.delete_one({"_id": doc["_id"]})
+
+def delete_all_user_data(usuario: str):
+    get_col("mary_historia").delete_many({"usuario": usuario})
+    get_col("mary_state").delete_many({"usuario": usuario})
+    get_col("mary_eventos").delete_many({"usuario": usuario})
+    get_col("mary_perfil").delete_many({"usuario": usuario})
+
+
 def list_interactions(usuario: str, limit: int = 400):
     col = get_col("mary_historia")
     cur = (col.find({"usuario": {"$regex": f"^{re.escape(usuario)}$", "$options": "i"}})
