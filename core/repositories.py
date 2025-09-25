@@ -1,6 +1,22 @@
 from datetime import datetime
 from typing import Any, Dict, List
 from .database import get_col
+import re
+
+def list_interactions(usuario: str, limit: int = 400):
+    col = get_col("mary_historia")
+    cur = (col.find({"usuario": {"$regex": f"^{re.escape(usuario)}$", "$options": "i"}})
+              .sort([("_id", 1)]).limit(limit))
+    return list(cur)
+
+def save_interaction(usuario: str, user_msg: str, mary_msg: str, modelo: str = ""):
+    get_col("mary_historia").insert_one({
+        "usuario": usuario,
+        "mensagem_usuario": user_msg,
+        "resposta_mary": mary_msg,
+        "modelo": modelo,
+        "timestamp": datetime.utcnow().isoformat(),
+    })
 
 _hist = lambda: get_col("mary_historia")
 _state = lambda: get_col("mary_state")
