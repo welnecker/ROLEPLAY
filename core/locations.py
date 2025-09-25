@@ -7,6 +7,7 @@ _CANON_EQUIVALENTES = {
     "motel status": {"motel status", "status"},
     "enseada do suá": {"enseada do suá", "enseada"},
     "restaurante partido alto": {"partido alto", "restaurante partido alto"},
+    "Chalé Rota do Lagarto": {"montanhas", "Chalé Rota do Lagarto"},
 }
 
 def _norm(s: str) -> str:
@@ -21,4 +22,5 @@ def infer_from_prompt(prompt: str) -> str | None:
     if re.search(r"\b(partido\s*alto|restaurante)\b", t):                            return "restaurante partido alto"
     if re.search(r"\b(enseada\s*do\s*su[aá]|enseada)\b", t):                         return "enseada do suá"
     if re.search(r"\b(motel\s*status|motel)\b", t):                                  return "motel status"
+    if re.search(r"\b(chalé\c*chalé|montanhas\b", t):                                  return "chalé Rota do Lagarto"  
     return None
