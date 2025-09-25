@@ -1,13 +1,11 @@
 # core/repositories.py
+from __future__ import annotations
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 import re
+from bson import ObjectId  # para deletar evento por _id
 
 from .database import get_col
-try:
-    from bson import ObjectId
-except Exception:
-    ObjectId = None  # fallback
 
 # --- Coleções (helpers) ---
 def _hist():
@@ -52,17 +50,15 @@ def set_fact(usuario: str, key: str, value: Any, meta: Optional[Dict[str, Any]] 
     )
 
 def get_fact(usuario: str, key: str, default=None):
-    d = _state().find_one({"usuario": usuario}, {f"fatos.{key}": 1})
+    d = _state().find_one(_uq(usuario), {f"fatos.{key}": 1})
     return (d or {}).get("fatos", {}).get(key, default)
 
-# ✅ retornar todos os fatos (sidebar)
 def get_facts(usuario: str) -> Dict[str, Any]:
-    d = _state().find_one({"usuario": usuario}, {"fatos": 1}) or {}
-    return d.get("fatos", {}) or {}
+    d = _state().find_one(_uq(usuario), {"fatos": 1})
+    return (d or {}).get("fatos", {}) or {}
 
-# ✅ deletar um fato específico
 def delete_fact(usuario: str, key: str) -> None:
-    _state().update_one({"usuario": usuario}, {"$unset": {f"fatos.{key}": "", f"meta.{key}": ""}})
+    _state().update_one(_uq(usuario), {"$unset": {f"fatos.{key}": "", f"meta.{key}": ""}})
 
 def register_event(
     usuario: str,
@@ -84,19 +80,16 @@ def register_event(
 def last_event(usuario: str, tipo: str):
     return _events().find_one({**_uq(usuario), "tipo": tipo}, sort=[("ts", -1)])
 
-# ✅ listar eventos (sidebar)
 def list_events(usuario: str, limit: int = 5) -> List[Dict[str, Any]]:
     cur = _events().find(_uq(usuario)).sort([("ts", -1)]).limit(limit)
     return list(cur)
 
-# ✅ deletar evento por _id
-def delete_event_by_id(event_id: str) -> None:
-    if ObjectId is None:
-        return
+def delete_event_by_id(event_id: str) -> bool:
     try:
-        _events().delete_one({"_id": ObjectId(event_id)})
+        res = _events().delete_one({"_id": ObjectId(event_id)})
+        return bool(res.deleted_count)
     except Exception:
-        pass
+        return False
 
 # -------- Deleters --------
 def delete_user_history(usuario: str) -> int:
@@ -119,9 +112,9 @@ def delete_all_user_data(usuario: str) -> Dict[str, int]:
     return out
 
 def reset_nsfw(usuario: str) -> None:
-    """Força NSFW OFF e limpa locks de cena (opcional)."""
+    """Força NSFW OFF e limpa locks."""
     _state().update_one(
-        {"usuario": usuario},
+        _uq(usuario),
         {
             "$set": {"fatos.virgem": True},
             "$unset": {
