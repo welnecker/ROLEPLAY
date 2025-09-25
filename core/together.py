@@ -2,27 +2,21 @@
 import json, time, requests
 from .config import settings
 
+_BASE = getattr(settings, "TOGETHER_BASE_URL", "https://api.together.xyz").rstrip("/")
+_PATH = getattr(settings, "TOGETHER_CHAT_PATH", "/v1/chat/completions")
+_URL  = f"{_BASE}{_PATH}"
+
 _session = requests.Session()
 _session.headers.update({
     "Content-Type": "application/json",
-    "X-Title": f"{settings.APP_NAME} | Mary",
+    "Authorization": f"Bearer {getattr(settings, 'TOGETHER_API_KEY', '')}",
 })
 
 def chat(payload: dict, timeout: int = 120, retries: int = 2) -> dict:
-    """
-    Wrapper simples para Together /chat/completions (formato OpenAI-compatible).
-    Espera payload com chaves: model, messages, max_tokens, temperature, top_p...
-    """
-    if not settings.TOGETHER_API_KEY:
-        raise RuntimeError("TOGETHER_API_KEY não configurada.")
-
-    url = settings.TOGETHER_BASE_URL.rstrip("/") + "/chat/completions"
-    headers = {"Authorization": f"Bearer {settings.TOGETHER_API_KEY}"}
-
     last = None
     for i in range(retries + 1):
         try:
-            r = _session.post(url, headers=headers, data=json.dumps(payload), timeout=timeout)
+            r = _session.post(_URL, data=json.dumps(payload), timeout=timeout)
             if r.ok:
                 return r.json()
             last = r.text
