@@ -7,15 +7,32 @@ from .repositories import save_interaction, get_history_docs, set_fact, get_fact
 from .rules import violou_mary, reforco_system
 from .locations import infer_from_prompt
 from .textproc import strip_metacena, formatar_roleplay_profissional
-from .openrouter import chat
 from .tokens import toklen
+
+# provedores
+from .openrouter import chat as openrouter_chat
+try:
+    from .together import chat as together_chat
+except Exception:
+    together_chat = None  # fallback se Together não estiver disponível
+
+
+def _route_chat(model: str, payload: dict) -> dict:
+    """
+    Decide o provedor:
+      - 'together/<slug>' → Together (remove o prefixo antes de enviar)
+      - qualquer outro     → OpenRouter
+    """
+    if model.startswith("together/"):
+        if not together_chat:
+            raise RuntimeError("Together não configurado (together_chat indisponível).")
+        true_model = model.split("/", 1)[1]
+        return together_chat({**payload, "model": true_model})
+    return openrouter_chat(payload)
 
 
 def _montar_historico(usuario: str, limite_tokens: int = 120_000) -> List[Dict[str, str]]:
-    """
-    Constrói o histórico user/assistant respeitando o limite de tokens.
-    Retorna HISTORY_BOOT se não houver histórico.
-    """
+    """Constrói o histórico user/assistant respeitando o limite de tokens."""
     docs = get_history_docs(usuario)
     if not docs:
         return HISTORY_BOOT[:]
@@ -37,21 +54,20 @@ def _montar_historico(usuario: str, limite_tokens: int = 120_000) -> List[Dict[s
 
 def _pos_processar_seguro(texto: str, max_frases_por_par: int = 3) -> str:
     """
-    Executa o pipeline de regex com saneamento prévio de barras invertidas.
-    Se algo falhar, tenta uma segunda vez e, no pior caso, retorna o texto original.
+    Pipeline de regex com saneamento de barras invertidas para evitar
+    erros do tipo 'bad escape \\c'.
     """
     if not texto:
         return texto
 
-    # 1) Sanear barras antes de regex
+    # Sanear antes de aplicar regex
     s = texto.replace("\\", "\\\\")
     try:
         s = strip_metacena(s)
         s = formatar_roleplay_profissional(s, max_frases_por_par=max_frases_por_par)
-        # 2) Restaurar barras para exibição
-        return s.replace("\\\\", "\\")
+        return s.replace("\\\\", "\\")  # restaura para exibição
     except ReError:
-        # Tentativa extra (rara). Se falhar, volta o original sem tocar.
+        # Tentativa extra; se falhar, retorna original
         try:
             s2 = strip_metacena(s)
             s2 = formatar_roleplay_profissional(s2, max_frases_por_par=max_frases_por_par)
@@ -62,8 +78,8 @@ def _pos_processar_seguro(texto: str, max_frases_por_par: int = 3) -> str:
 
 def gerar_resposta(usuario: str, prompt_usuario: str, model: str) -> str:
     """
-    Gera a resposta via OpenRouter, aplica pós-processamentos seguros,
-    formata em parágrafos curtos e persiste a interação.
+    Gera a resposta via provedor (OpenRouter/Together), aplica pós-processos
+    seguros, formata em parágrafos curtos e persiste a interação.
     """
     # 1) Inferir e fixar local, se detectado
     loc = infer_from_prompt(prompt_usuario) or ""
@@ -96,17 +112,17 @@ def gerar_resposta(usuario: str, prompt_usuario: str, model: str) -> str:
         "top_p": 0.9,
     }
 
-    # 3) Chamada ao provedor
-    data = chat(payload)
+    # 3) Chamada ao provedor (roteada)
+    data = _route_chat(model, payload)
     resposta = (data.get("choices", [{}])[0].get("message", {}) or {}).get("content", "") or ""
 
     # 4) Retry leve se violar regras duras (cabelo/curso/mãe etc.)
     if violou_mary(resposta):
         payload_retry = {**payload, "messages": [messages[0], reforco_system()] + messages[1:]}
-        data2 = chat(payload_retry)
+        data2 = _route_chat(model, payload_retry)
         resposta = (data2.get("choices", [{}])[0].get("message", {}) or {}).get("content", "") or resposta
 
-    # 5) Pós-processamento SEGURO (com saneamento de \ antes da regex)
+    # 5) Pós-processamento SEGURO
     resposta = _pos_processar_seguro(resposta, max_frases_por_par=3)
 
     # 6) Persistir
