@@ -8,13 +8,13 @@ from .repositories import (
     save_interaction, get_history_docs, set_fact, get_fact,
     get_facts, last_event
 )
-from .rules import violou_mary, reforco_system
+from .rules import violou_mary, reforco_system  # strip_bordoes é opcional aqui
 from .locations import infer_from_prompt
 from .textproc import strip_metacena, formatar_roleplay_profissional
 from .tokens import toklen
 from .service_router import route_chat_strict  # roteamento sem fallback oculto
 
-# Heurística simples: evita 3ª pessoa “Mary …” no início de linha
+# Heurística simples: evitar saída em 3ª pessoa “Mary …” abrindo parágrafo
 _FIRST_PERSON_FLAG = re.compile(r"(^|\n)\s*Mary\b", re.IGNORECASE)
 
 
@@ -56,12 +56,15 @@ def _montar_historico(usuario: str, limite_tokens: int = 120_000) -> List[Dict[s
 
 
 def _pos_processar_seguro(texto: str, max_frases_por_par: int = 2) -> str:
-    """Sanitiza barras e garante parágrafos de 1–2 frases com \\n\\n entre blocos."""
+    """Sanitiza barras e garante parágrafos 1–2 frases, mantendo espaço para detalhes sensoriais."""
     if not texto:
         return texto
     s = texto.replace("\\", "\\\\")
     try:
         s = strip_metacena(s)
+        # (opcional) se estiver usando strip_bordoes do rules.py, aplique aqui:
+        # from .rules import strip_bordoes
+        # s = strip_bordoes(s)
         s = formatar_roleplay_profissional(s, max_frases_por_par=max_frases_por_par)
         s = s.replace("\\\\", "\\")
         # garante parágrafos em Markdown
@@ -69,7 +72,6 @@ def _pos_processar_seguro(texto: str, max_frases_por_par: int = 2) -> str:
         s = re.sub(r"\n{3,}", "\n\n", s)
         return s
     except ReError:
-        # No pior caso, devolve original
         return texto
 
 
@@ -78,7 +80,7 @@ def _precisa_primeira_pessoa(txt: str) -> bool:
 
 
 def _reforcar_primeira_pessoa(model: str, resposta: str) -> str:
-    """Reescreve a MESMA saída em 1ª pessoa usando o mesmo provedor/modelo."""
+    """Reescreve a saída em 1ª pessoa (mesmo provedor/modelo)."""
     rewriter = [
         {
             "role": "system",
@@ -103,7 +105,7 @@ def gerar_resposta(usuario: str, prompt_usuario: str, model: str) -> str:
     if loc:
         set_fact(usuario, "local_cena_atual", loc, {"fonte": "service"})
 
-    # 2) Histórico + estilo + contexto
+    # 2) Histórico + estilo + memória
     hist = _montar_historico(usuario)
     local_atual = get_fact(usuario, "local_cena_atual", "") or ""
     memoria = _memory_context(usuario)
@@ -112,11 +114,12 @@ def gerar_resposta(usuario: str, prompt_usuario: str, model: str) -> str:
     estilo_msg = {
         "role": "system",
         "content": (
-            "ESTILO: 1ª pessoa (eu). Tom adulto, direto, envolvente. "
-            "3–5 parágrafos; 1–2 frases por parágrafo. "
-            "Frases curtas (4–12 palavras). Sem parênteses de metacena. "
-            "Sem diminutivos; sem infantilização. "
-            "Mantenha coerência estrita com LOCAL_ATUAL."
+            "ESTILO: 1ª pessoa (eu). Tom adulto, seguro e sensorial, sem exagero. "
+            "3–5 parágrafos; 1–2 frases por parágrafo; frases curtas (4–12 palavras). "
+            "Permita 0–1 detalhe sensorial marcante por parágrafo (ex.: meus cabelos negros volumosos, "
+            "pele aquecida ao toque, perfume discreto, respiração perto da orelha), somente quando fizer sentido. "
+            "Sem parênteses de metacena. Sem diminutivos/infantilização. "
+            "Coerência estrita com LOCAL_ATUAL e com a memória canônica."
         ),
     }
 
@@ -135,7 +138,7 @@ def gerar_resposta(usuario: str, prompt_usuario: str, model: str) -> str:
         "top_p": 0.9,
     }
 
-    # 3) Chamada (STRICT — respeita Together/OpenRouter conforme o slug; sem fallback oculto)
+    # 3) Chamada (STRICT — Together/OpenRouter sem fallback oculto)
     data, used_model, provider = route_chat_strict(model, payload)
     resposta = (data.get("choices", [{}])[0].get("message", {}) or {}).get("content", "") or ""
 
@@ -144,14 +147,14 @@ def gerar_resposta(usuario: str, prompt_usuario: str, model: str) -> str:
         data2, _, _ = route_chat_strict(model, {**payload, "messages": [messages[0], reforco_system()] + messages[1:]})
         resposta = (data2.get("choices", [{}])[0].get("message", {}) or {}).get("content", "") or resposta
 
-    # 5) Primeira pessoa (reescrita leve) — somente se detectarmos 3ª pessoa “Mary …”
+    # 5) 1ª pessoa (se detectar 3ª pessoa “Mary …”)
     if _precisa_primeira_pessoa(resposta):
         try:
             resposta = _reforcar_primeira_pessoa(model, resposta)
         except Exception:
             pass
 
-    # 6) Pós-processo: garante parágrafos (\\n\\n) e remove metacena
+    # 6) Pós-processo: garantir parágrafos e preservar sensualidade
     resposta = _pos_processar_seguro(resposta, max_frases_por_par=2)
 
     # 7) Persistir
