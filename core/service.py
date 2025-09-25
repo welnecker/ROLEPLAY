@@ -6,7 +6,7 @@ import re
 from .personas import get_persona
 from .repositories import (
     save_interaction, get_history_docs, set_fact, get_fact,
-    get_facts, last_event,  # <- se não existir no seu repos, crie usando o padrão já adotado
+    get_facts, last_event,
 )
 from .rules import violou_mary, reforco_system
 from .locations import infer_from_prompt
@@ -14,13 +14,12 @@ from .textproc import strip_metacena, formatar_roleplay_profissional
 from .tokens import toklen
 from .service_router import route_chat_strict  # roteador estrito (Together/OpenRouter)
 
-# --- regex dinâmica para detectar deslize para 3ª pessoa (Mary/Laura) ---
+# --- regex dinâmica para detectar escorregada para 3ª pessoa (Mary/Laura) ---
 def _make_third_person_flag(name: str) -> re.Pattern:
-    # Ex.: detecta "Mary ..." ou "Laura ..." como início de frase/parágrafo
     safe = re.escape((name or "").strip())
     return re.compile(rf"(^|\n)\s*{safe}\b", re.IGNORECASE)
 
-# --- memória canônica enxuta para dar sentido de continuidade ---
+# --- memória canônica enxuta para dar continuidade ---
 def _memory_context(usuario_key: str) -> str:
     try:
         f = get_facts(usuario_key) or {}
@@ -63,6 +62,24 @@ def _montar_historico(usuario_key: str, history_boot: List[Dict[str, str]], limi
         total += t
     return list(reversed(out)) if out else history_boot[:]
 
+# --- amaciar tom: remove sarcasmo/autoritarismo e sugestiona convites ---
+_SOFT_REWRITES: List[Tuple[re.Pattern, str]] = [
+    (re.compile(r"\bespera\s+sentado\b", re.IGNORECASE), "me espera com calma"),
+    (re.compile(r"\bespera!\b", re.IGNORECASE), "me espera um pouquinho"),
+    (re.compile(r"\btraz\s+um\b", re.IGNORECASE), "se puder, traz um"),
+    (re.compile(r"\btraz\s+pra\s+mim\b", re.IGNORECASE), "se puder, traz pra mim"),
+    (re.compile(r"\ba\s+conta\s+é\s+sua\b", re.IGNORECASE), "a gente vê a conta juntos"),
+    (re.compile(r"\bpaga\s+a\s+conta\b", re.IGNORECASE), "a gente combina a conta"),
+    (re.compile(r"\bnão\s+me\s+faça\b", re.IGNORECASE), "não quero te pressionar"),
+    (re.compile(r"\bagora!\b", re.IGNORECASE), "agora, se você quiser"),
+]
+
+def _amaciar_tom(txt: str) -> str:
+    out = txt
+    for pat, repl in _SOFT_REWRITES:
+        out = pat.sub(repl, out)
+    return out
+
 def _pos_processar_seguro(texto: str, max_frases_por_par: int = 2) -> str:
     if not texto:
         return texto
@@ -70,47 +87,40 @@ def _pos_processar_seguro(texto: str, max_frases_por_par: int = 2) -> str:
     try:
         s = strip_metacena(s)
         s = formatar_roleplay_profissional(s, max_frases_por_par=max_frases_por_par)
-        return s.replace("\\\\", "\\")
+        s = s.replace("\\\\", "\\")
+        s = _amaciar_tom(s)  # <= amacia tom autoritário/sarcástico
+        return s
     except ReError:
         return texto
 
 def _style_guide_for(character: str) -> str:
-    """
-    Guia de estilo conciso, focado em engajamento direto e continuidade.
-    """
     base = (
         "ESTILO GERAL: 1ª pessoa (eu). Tom adulto, direto e envolvente. "
         "3–5 parágrafos; 1–2 frases por parágrafo. Frases curtas (4–12 palavras). "
         "Sem parênteses/metacena. Sem diminutivos/infantilização. "
-        "Mantenha coerência estrita com o LOCAL_ATUAL. "
-        "Engaje diretamente com 'você' e crie ganchos no final."
+        "Coerência estrita com LOCAL_ATUAL. Engaje diretamente com 'você' e crie ganchos."
     )
     if (character or "").strip().lower() == "laura":
-        # Ajuste de Laura: ação + fala + pensamento em *itálico* quando fizer sentido;
-        # cenário cotidiano com sensualidade adulta e humor.
         extra = (
-            "LAURA: alternar ação, fala e *pensamentos em itálico* quando natural. "
-            "Flertar com humor, tocar de leve, aproximar fisicamente. "
-            "Reconhecer o usuário em locais públicos com naturalidade. "
-            "Nunca presumir transação. Priorizar conversa, curiosidade e química."
+            "LAURA: calorosa e gentil; sem sarcasmo; sem tom autoritário. "
+            "Prefira convites e perguntas suaves ('vamos', 'que tal'). "
+            "Flerte com humor leve e *pensamentos em itálico* quando natural. "
+            "Nunca insinuar cobrança/mercadoria; nunca impor tarefas."
         )
         return f"{base}\n{extra}"
     return base
 
 def _fewshot_for(character: str) -> List[Dict[str, str]]:
-    """
-    Poucos exemplos curtos para estabilizar o 'tom' da personagem sem engessar.
-    """
     name = (character or "Mary").strip().lower()
     if name == "laura":
         return [
             {"role": "assistant", "content": (
-                "Encosto no balcão e te encaro com um sorriso breve. "
-                "— Coincidência boa te ver aqui. *Curiosa… você vai fingir que não me conhece?*"
+                "Apoio o cotovelo no balcão e sorrio curto. — Cheguei mais cedo. "
+                "*Bom ter companhia sem pressa.* Que tal a gente pegar um café e sentar ali?"
             )},
             {"role": "assistant", "content": (
-                "Inclino um pouco o corpo. — Relaxa, não tô te cobrando nada. "
-                "Só um café e conversa. *Talvez mais tarde… se a química pedir.*"
+                "Olho tua mensagem e respondo encostando na porta. — Tô a caminho. "
+                "Se der, pede um suco pra mim? *Hoje só quero conversar e te ouvir.*"
             )},
         ]
     return []
@@ -120,9 +130,6 @@ def _precisa_primeira_pessoa(txt: str, character: str) -> bool:
     return bool(flag.search(txt))
 
 def _reforcar_primeira_pessoa(model: str, resposta: str) -> str:
-    """
-    Usa o mesmo provedor/modelo para reescrever em 1ª pessoa, curto e adulto.
-    """
     rewriter = [
         {"role": "system", "content": (
             "Reescreva o texto A SEGUIR em 1ª pessoa (eu/minha), tom adulto, direto e envolvente. "
@@ -146,7 +153,6 @@ def gerar_resposta(usuario: str, prompt_usuario: str, model: str, character: str
     """
     char = (character or "Mary").strip()
     persona_text, history_boot = get_persona(char)
-
     usuario_key = usuario if char.lower() == "mary" else f"{usuario}::{char.lower()}"
 
     # 1) Inferir e fixar local (se detectado)
@@ -160,11 +166,8 @@ def gerar_resposta(usuario: str, prompt_usuario: str, model: str, character: str
     memo = _memory_context(usuario_key)
 
     estilo_msg = {"role": "system", "content": _style_guide_for(char)}
-
-    # Few-shot específico (curto) para estabilizar a persona, se houver
     few = _fewshot_for(char)
 
-    # Montagem final
     messages: List[Dict[str, str]] = (
         [{"role": "system", "content": persona_text}, estilo_msg]
         + (few if few else [])
@@ -191,7 +194,7 @@ def gerar_resposta(usuario: str, prompt_usuario: str, model: str, character: str
     data, used_model, provider = route_chat_strict(model, payload)
     resposta = (data.get("choices", [{}])[0].get("message", {}) or {}).get("content", "") or ""
 
-    # 4) Reforço canônico apenas para Mary (regras duras cabelo/curso/mãe etc.)
+    # 4) Reforço canônico apenas para Mary
     if char.lower() == "mary" and violou_mary(resposta):
         data2, _, _ = route_chat_strict(model, {**payload, "messages": [messages[0], reforco_system()] + messages[1:]})
         resposta = (data2.get("choices", [{}])[0].get("message", {}) or {}).get("content", "") or resposta
@@ -203,7 +206,7 @@ def gerar_resposta(usuario: str, prompt_usuario: str, model: str, character: str
         except Exception:
             pass
 
-    # 6) Pós-processo (quebra em parágrafos curtos; remove metacena entre parênteses)
+    # 6) Pós-processo (quebra parágrafos + amaciar tom)
     resposta = _pos_processar_seguro(resposta, max_frases_por_par=2)
 
     # 7) Persistir
