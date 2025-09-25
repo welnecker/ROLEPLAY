@@ -1,4 +1,3 @@
-# main.py
 from typing import Optional, List, Tuple
 import streamlit as st
 
@@ -11,7 +10,7 @@ except Exception as e:
 
 # Repositório: fatos e histórico
 try:
-    from core.repositories import get_fact, get_history_docs, set_fact, get_facts, list_events
+    from core.repositories import get_fact, get_history_docs, set_fact
 except Exception:
     # fallbacks leves para não quebrar a UI
     def get_fact(_u: str, _k: str, default=None):
@@ -20,10 +19,6 @@ except Exception:
         return []
     def set_fact(*_a, **_k):
         return None
-    def get_facts(_u: str):
-        return {}
-    def list_events(_u: str, limit: int = 5):
-        return []
 
 # Utilitários de manutenção (podem não existir)
 try:
@@ -31,19 +26,20 @@ try:
         delete_user_history,
         delete_last_interaction,
         delete_all_user_data,
+        reset_nsfw,  # opcional
     )
 except Exception:
     def delete_user_history(_u: str): ...
-    def delete_last_interaction(_u: str): return False
+    def delete_last_interaction(_u: str): ...
     def delete_all_user_data(_u: str): ...
+    def reset_nsfw(_u: str): ...
 
-# NSFW gate (com ativar/desativar)
+# NSFW gate (opcional)
 try:
-    from core.nsfw import nsfw_enabled, enable_nsfw, reset_nsfw
+    from core.nsfw import nsfw_enabled
 except Exception:
-    def nsfw_enabled(_user: str) -> bool: return False
-    def enable_nsfw(_user: str): ...
-    def reset_nsfw(_user: str): ...
+    def nsfw_enabled(_user: str) -> bool:
+        return False
 
 # Inferência de local
 try:
@@ -51,6 +47,12 @@ try:
 except Exception:
     def infer_location(_prompt: str) -> Optional[str]:
         return None
+
+# Bootstrap do contexto canônico (parceiro Janio, 1º encontro, etc.)
+try:
+    from core.bootstrap import ensure_default_context
+except Exception:
+    def ensure_default_context(_u: str): ...
 
 # --- helpers ---
 def _rerun():
@@ -98,7 +100,7 @@ MODEL_OPTIONS = [
     "qwen/qwen3-max",
     "nousresearch/hermes-3-llama-3.1-405b",
 
-    # Together (use exatamente estes slugs na sua conta Together)
+    # Together (use os slugs exatos da sua conta Together)
     "together/meta-llama/Meta-Llama-3.1-405B-Instruct-Turbo",
     "together/Qwen/Qwen2.5-72B-Instruct",
     "together/google/gemma-2-27b-it",
@@ -108,8 +110,13 @@ st.selectbox("🧠 Modelo", MODEL_OPTIONS, key="modelo")
 usuario = st.session_state["usuario"]
 modelo  = st.session_state["modelo"]
 
-# --- carregar histórico do Mongo por usuário (uma vez por troca de usuário) ---
+# --- carregar histórico + bootstrap do contexto (uma vez por troca de usuário) ---
 if st.session_state["history_loaded_for"] != usuario:
+    # garante parceiro Janio e 1º encontro
+    try:
+        ensure_default_context(usuario)
+    except Exception:
+        pass
     _reload_history(usuario)
 
 # --- sidebar (status) ---
@@ -118,8 +125,7 @@ try:
 except Exception:
     local_atual = "—"
 
-nsfw_on = nsfw_enabled(usuario)
-nsfw_badge = "✅ Liberado" if nsfw_on else "🔒 Bloqueado"
+nsfw_badge = "✅ Liberado" if nsfw_enabled(usuario) else "🔒 Bloqueado"
 provider = "Together" if modelo.startswith("together/") else "OpenRouter"
 
 st.sidebar.markdown(f"**NSFW:** {nsfw_badge}")
@@ -128,73 +134,10 @@ st.sidebar.caption(f"Provedor: **{provider}**")
 
 st.sidebar.markdown("---")
 st.session_state["auto_loc"] = st.sidebar.checkbox(
-    "📍 Inferir local automaticamente",
-    value=st.session_state["auto_loc"],
-    help=(
-        "Se ligado, o app tenta detectar o cenário (ex.: Praia de Camburi, "
-        "Academia Fisium Body, Clube Náutico etc.) a partir do seu texto e "
-        "salva em `local_cena_atual` para manter a coerência das cenas."
-    ),
+    "📍 Inferir local automaticamente", value=st.session_state["auto_loc"]
 )
 
-# --- NSFW: ON/OFF direto na UI ---
-st.sidebar.subheader("🔓 NSFW")
-col_n1, col_n2 = st.sidebar.columns(2)
-if col_n1.button("Liberar NSFW"):
-    try:
-        enable_nsfw(usuario)
-        st.sidebar.success("NSFW liberado para este usuário.")
-        _rerun()
-    except Exception as e:
-        st.sidebar.error(f"Falha ao liberar NSFW: {e}")
-
-if col_n2.button("Bloquear NSFW"):
-    try:
-        reset_nsfw(usuario)
-        st.sidebar.info("NSFW bloqueado para este usuário.")
-        _rerun()
-    except Exception as e:
-        st.sidebar.error(f"Falha ao bloquear NSFW: {e}")
-
-# --- Memória Canônica (leitura rápida) ---
-st.sidebar.markdown("---")
-st.sidebar.subheader("🧠 Memória Canônica")
-
-facts = {}
-events = []
-try:
-    facts = get_facts(usuario) or {}
-except Exception:
-    facts = {}
-
-try:
-    events = list_events(usuario, limit=5) or []
-except Exception:
-    events = []
-
-# Fatos
-if facts:
-    st.sidebar.markdown("**Fatos**")
-    for k, v in facts.items():
-        st.sidebar.write(f"- `{k}` → {v}")
-else:
-    st.sidebar.caption("_Nenhum fato salvo._")
-
-# Eventos
-st.sidebar.markdown("**Eventos (últimos 5)**")
-if events:
-    for ev in events:
-        tipo = ev.get("tipo", "?")
-        desc = ev.get("descricao", "?")
-        loc = ev.get("local", "—")
-        ts  = ev.get("ts")
-        when = ts.strftime("%Y-%m-%d %H:%M") if hasattr(ts, "strftime") else str(ts or "sem data")
-        st.sidebar.write(f"- **{tipo}** — {desc} ({loc}) em {when}")
-else:
-    st.sidebar.caption("_Nenhum evento registrado._")
-
-# --- Manutenção ---
-st.sidebar.markdown("---")
+# --- sidebar (manutenção) ---
 st.sidebar.subheader("🧹 Manutenção")
 colA, colB = st.sidebar.columns(2)
 
@@ -230,6 +173,14 @@ if st.sidebar.button("🧨 Apagar TUDO (chat + memórias)"):
     except Exception as e:
         st.sidebar.error(f"Falha ao apagar tudo: {e}")
 
+if st.sidebar.button("🔒 Forçar NSFW OFF"):
+    try:
+        reset_nsfw(usuario)
+        st.sidebar.success("NSFW desativado para este usuário.")
+        _rerun()
+    except Exception as e:
+        st.sidebar.error(f"Falha ao forçar NSFW OFF: {e}")
+
 # --- render histórico já existente ---
 for role, content in st.session_state["history"]:
     if role == "user":
@@ -241,12 +192,13 @@ for role, content in st.session_state["history"]:
 
 # --- input do chat ---
 if prompt := st.chat_input("Envie sua mensagem para Mary"):
+    # mostra e guarda a mensagem do usuário
     with st.chat_message("user"):
         st.markdown(prompt)
     st.session_state["history"].append(("user", prompt))
 
     # inferir/fixar local automaticamente (se possível)
-    if st.session_state["auto_loc"]:
+    if st.session_state["auto_loc"] and prompt:
         try:
             loc = infer_location(prompt)
             if loc:
@@ -254,13 +206,14 @@ if prompt := st.chat_input("Envie sua mensagem para Mary"):
         except Exception:
             pass
 
-    # gerar resposta
+    # gerar resposta (service roteia provedor; NÃO faz fallback automático)
     with st.spinner("Gerando..."):
         try:
             resposta = gerar_resposta(usuario, prompt, model=modelo)
         except Exception as e:
             resposta = f"Erro ao gerar resposta: {e}"
 
+    # mostrar e guardar a resposta
     with st.chat_message("assistant", avatar="💚"):
         st.markdown(resposta)
     st.session_state["history"].append(("assistant", resposta))
