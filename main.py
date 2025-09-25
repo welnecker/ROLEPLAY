@@ -9,29 +9,18 @@ except Exception as e:
     st.error(f"Falha ao importar core.service: {e}")
     raise
 
-# Repositório: fatos e histórico
-try:
-    from core.repositories import get_fact, get_history_docs, set_fact
-except Exception:
-    def get_fact(_u: str, _k: str, default=None): return default
-    def get_history_docs(_u: str, limit: int = 400): return []
-    def set_fact(*_a, **_k): return None
-
-# Utilitários (opcionais)
+# Repositório
 try:
     from core.repositories import (
-        delete_user_history,
-        delete_last_interaction,
-        delete_all_user_data,
-        reset_nsfw,
+        get_fact, get_facts, get_history_docs, set_fact,
+        delete_user_history, delete_last_interaction, delete_all_user_data, reset_nsfw,
+        register_event, list_events
     )
-except Exception:
-    def delete_user_history(_u: str): ...
-    def delete_last_interaction(_u: str): ...
-    def delete_all_user_data(_u: str): ...
-    def reset_nsfw(_u: str): ...
+except Exception as e:
+    st.error(f"Falha ao importar core.repositories: {e}")
+    raise
 
-# NSFW gate (opcional)
+# NSFW (opcional)
 try:
     from core.nsfw import nsfw_enabled
 except Exception:
@@ -65,7 +54,7 @@ def _reload_history(user_key: str):
 
 # --- página ---
 st.set_page_config(page_title="Roleplay | Mary Massariol", layout="centered")
-st.title("Roleplay | Roleplay Multi-Persona")
+st.title("Roleplay | Mary Massariol")
 
 # --- estado base ---
 st.session_state.setdefault("usuario", "welnecker")
@@ -75,12 +64,12 @@ st.session_state.setdefault("history", [])               # type: List[Tuple[str,
 st.session_state.setdefault("history_loaded_for", None)
 st.session_state.setdefault("auto_loc", True)
 
-# --- controles de topo ---
+# --- controles topo ---
 c1, c2 = st.columns([2,2])
 with c1:
     st.text_input("👤 Usuário", key="usuario")
 with c2:
-    st.selectbox("🎭 Personagem", ["Mary", "Laura"], key="personagem")
+    st.selectbox("🎭 Personagem", ["Mary"], key="personagem")  # mantém só Mary aqui; outras depois
 
 MODEL_OPTIONS = [
     # OpenRouter
@@ -89,7 +78,8 @@ MODEL_OPTIONS = [
     "thedrummer/anubis-70b-v1.1",
     "qwen/qwen3-max",
     "nousresearch/hermes-3-llama-3.1-405b",
-    # Together
+
+    # Together (se usar)
     "together/meta-llama/Meta-Llama-3.1-405B-Instruct-Turbo",
     "together/Qwen/Qwen2.5-72B-Instruct",
     "together/google/gemma-2-27b-it",
@@ -97,17 +87,17 @@ MODEL_OPTIONS = [
 st.selectbox("🧠 Modelo", MODEL_OPTIONS, key="modelo")
 
 usuario = st.session_state["usuario"]
-personagem = st.session_state["personagem"]
+personagem = st.session_state["personagem"]  # "Mary"
 modelo  = st.session_state["modelo"]
 
-# chave de isolamento por personagem
-usuario_key = f"{usuario}::{personagem.lower()}"
+# Compat total: Mary usa a chave antiga (aponta para os dados já existentes)
+usuario_key = usuario  # (para outras personagens, usaria f"{usuario}::nome")
 
-# --- carregar histórico (por personagem) ---
+# --- carregar histórico (Mary) ---
 if st.session_state["history_loaded_for"] != usuario_key:
     _reload_history(usuario_key)
 
-# --- sidebar (status) ---
+# --- sidebar: STATUS ---
 try:
     local_atual = get_fact(usuario_key, "local_cena_atual", "—")
 except Exception:
@@ -116,7 +106,6 @@ except Exception:
 nsfw_badge = "✅ Liberado" if nsfw_enabled(usuario_key) else "🔒 Bloqueado"
 provider = "Together" if modelo.startswith("together/") else "OpenRouter"
 
-st.sidebar.markdown(f"**Personagem:** **{personagem}**")
 st.sidebar.markdown(f"**NSFW:** {nsfw_badge}")
 st.sidebar.caption(f"Local atual: {local_atual}")
 st.sidebar.caption(f"Provedor: **{provider}**")
@@ -124,10 +113,67 @@ st.sidebar.caption(f"Provedor: **{provider}**")
 st.sidebar.markdown("---")
 st.session_state["auto_loc"] = st.sidebar.checkbox("📍 Inferir local automaticamente", value=st.session_state["auto_loc"])
 
-# --- sidebar (manutenção) ---
-st.sidebar.subheader("🧹 Manutenção")
-colA, colB = st.sidebar.columns(2)
+# --- sidebar: MEMÓRIA CANÔNICA (ver/adicionar) ---
+st.sidebar.subheader("🧠 Memória Canônica")
 
+# listar fatos
+try:
+    fatos = get_facts(usuario_key)
+except Exception:
+    fatos = {}
+if fatos:
+    for k, v in fatos.items():
+        st.sidebar.write(f"- `{k}` → {v}")
+else:
+    st.sidebar.caption("_Nenhum fato salvo._")
+
+# listar últimos eventos
+evs = []
+try:
+    evs = list_events(usuario_key, limit=5)
+except Exception:
+    pass
+st.sidebar.markdown("**Eventos (últimos 5)**")
+if evs:
+    for ev in evs:
+        ts = ev.get("ts")
+        ts_str = ts.strftime("%Y-%m-%d %H:%M") if hasattr(ts, "strftime") else str(ts or "")
+        st.sidebar.write(f"- **{ev.get('tipo','?')}** — {ev.get('descricao','?')} ({ev.get('local') or '—'}) em {ts_str}")
+else:
+    st.sidebar.caption("_Nenhum evento recente._")
+
+# forms para salvar fato/evento (sem mexer direto em st.session_state da key)
+with st.sidebar.form("form_fato", clear_on_submit=True):
+    st.markdown("**Adicionar Fato**")
+    f_chave = st.text_input("Chave", placeholder="ex.: parceiro_atual")
+    f_valor = st.text_input("Valor", placeholder="ex.: Janio")
+    salvar_fato = st.form_submit_button("💾 Salvar fato")
+    if salvar_fato and f_chave.strip():
+        try:
+            set_fact(usuario_key, f_chave.strip(), f_valor.strip(), {"fonte": "manual"})
+            st.success("Fato salvo.")
+            _rerun()
+        except Exception as e:
+            st.error(f"Falha ao salvar fato: {e}")
+
+with st.sidebar.form("form_evento", clear_on_submit=True):
+    st.markdown("**Adicionar Evento**")
+    e_tipo  = st.text_input("Tipo", placeholder="ex.: primeira_vez")
+    e_desc  = st.text_area("Descrição", placeholder="texto curto factual", height=60)
+    e_local = st.text_input("Local (opcional)", placeholder="ex.: Praia de Camburi")
+    salvar_evento = st.form_submit_button("💾 Salvar evento")
+    if salvar_evento and e_tipo.strip() and e_desc.strip():
+        try:
+            register_event(usuario_key, e_tipo.strip(), e_desc.strip(), (e_local.strip() or None), {"fonte": "manual"})
+            st.success("Evento salvo.")
+            _rerun()
+        except Exception as e:
+            st.error(f"Falha ao salvar evento: {e}")
+
+st.sidebar.markdown("---")
+st.sidebar.subheader("🧹 Manutenção")
+
+colA, colB = st.sidebar.columns(2)
 if colA.button("🔄 Resetar histórico"):
     try:
         delete_user_history(usuario_key)
@@ -155,15 +201,25 @@ if st.sidebar.button("🧨 Apagar TUDO (chat + memórias)"):
         delete_all_user_data(usuario_key)
         st.session_state["history"] = []
         st.session_state["history_loaded_for"] = None
-        st.sidebar.success("Tudo apagado para este usuário/personagem.")
+        st.sidebar.success("Tudo apagado para este usuário.")
         _rerun()
     except Exception as e:
         st.sidebar.error(f"Falha ao apagar tudo: {e}")
 
+# Atalho NSFW ON (registra canônico primeira_vez)
+if st.sidebar.button("🔓 Marcar primeira vez (NSFW ON)"):
+    try:
+        set_fact(usuario_key, "virgem", False, {"fonte": "sidebar"})
+        register_event(usuario_key, "primeira_vez", "Mary e Janio tiveram sua primeira vez.", "motel status", {"origin": "sidebar"})
+        st.sidebar.success("NSFW liberado (virgem=False) e evento canônico registrado.")
+        _rerun()
+    except Exception as e:
+        st.sidebar.error(f"Falha ao marcar primeira vez: {e}")
+
 if st.sidebar.button("🔒 Forçar NSFW OFF"):
     try:
         reset_nsfw(usuario_key)
-        st.sidebar.success("NSFW desativado para este usuário/personagem.")
+        st.sidebar.success("NSFW desativado para este usuário.")
         _rerun()
     except Exception as e:
         st.sidebar.error(f"Falha ao forçar NSFW OFF: {e}")
@@ -178,12 +234,11 @@ for role, content in st.session_state["history"]:
             st.markdown(content)
 
 # --- input do chat ---
-if prompt := st.chat_input(f"Fale com {personagem}"):
+if prompt := st.chat_input("Envie sua mensagem para Mary"):
     with st.chat_message("user"):
         st.markdown(prompt)
     st.session_state["history"].append(("user", prompt))
 
-    # inferir/fixar local automaticamente (por personagem)
     if st.session_state["auto_loc"]:
         try:
             loc = infer_location(prompt)
@@ -194,8 +249,7 @@ if prompt := st.chat_input(f"Fale com {personagem}"):
 
     with st.spinner("Gerando..."):
         try:
-            # >>> Agora passamos character=personagem <<<
-            resposta = gerar_resposta(usuario, prompt, model=modelo, character=personagem)
+            resposta = gerar_resposta(usuario, prompt, model=modelo, character="Mary")
         except Exception as e:
             resposta = f"Erro ao gerar resposta: {e}"
 
