@@ -179,28 +179,32 @@ if st.sidebar.button("🔒 Forçar NSFW OFF"):
 st.sidebar.markdown("---")
 st.sidebar.subheader("🧠 Memória Canônica")
 
-# alternador
-st.session_state["mem_tipo"] = st.sidebar.radio("Tipo de memória", ["Fato", "Evento"], horizontal=True, key="mem_tipo")
+# NUNCA faça: st.session_state["mem_tipo"] = st.sidebar.radio(..., key="mem_tipo")
+# Use a variável local:
+mem_tipo = st.sidebar.radio("Tipo de memória", ["Fato", "Evento"], horizontal=True, key="mem_tipo")
 
-if st.session_state["mem_tipo"] == "Fato":
-    st.session_state["mem_chave"] = st.sidebar.text_input(
+if mem_tipo == "Fato":
+    mem_chave = st.sidebar.text_input(
         "Chave do fato (ex.: parceiro_atual, primeiro_encontro)",
-        value=st.session_state["mem_chave"], key="mem_chave"
+        key="mem_chave"
     )
-    st.session_state["mem_valor"] = st.sidebar.text_area(
+    mem_valor = st.sidebar.text_area(
         "Valor do fato",
-        value=st.session_state["mem_valor"], key="mem_valor", height=70
+        key="mem_valor",
+        height=70
     )
     colf1, colf2 = st.sidebar.columns(2)
     if colf1.button("💾 Salvar fato"):
-        chave = (st.session_state["mem_chave"] or "").strip()
-        valor = (st.session_state["mem_valor"] or "").strip()
+        chave = (mem_chave or "").strip()
+        valor = (mem_valor or "").strip()
         if chave and valor:
             try:
                 set_fact(usuario, chave, valor, {"fonte": "manual", "ts": datetime.utcnow().isoformat()})
                 st.sidebar.success(f"Fato salvo: {chave}")
+                # limpar campos do widget via session_state + rerun
                 st.session_state["mem_chave"] = ""
                 st.session_state["mem_valor"] = ""
+                st.rerun()
             except Exception as e:
                 st.sidebar.error(f"Falha ao salvar fato: {e}")
         else:
@@ -208,40 +212,45 @@ if st.session_state["mem_tipo"] == "Fato":
     if colf2.button("🧽 Limpar campos (fato)"):
         st.session_state["mem_chave"] = ""
         st.session_state["mem_valor"] = ""
+        st.rerun()
 
 else:
-    st.session_state["mem_chave"] = st.sidebar.text_input(
+    tipo_evt = st.sidebar.text_input(
         "Tipo do evento (ex.: primeiro_encontro, primeira_vez)",
-        value=st.session_state["mem_chave"], key="mem_chave_evt"
+        key="mem_chave_evt"
     )
-    st.session_state["mem_valor"] = st.sidebar.text_area(
+    desc_evt = st.sidebar.text_area(
         "Descrição do evento (curta, factual)",
-        value=st.session_state["mem_valor"], key="mem_valor_evt", height=70
+        key="mem_valor_evt",
+        height=70
     )
-    st.session_state["mem_local"] = st.sidebar.text_input(
+    loc_evt = st.sidebar.text_input(
         "Local (opcional)",
-        value=st.session_state["mem_local"], key="mem_local_evt", placeholder="Ex.: Praia de Camburi"
+        key="mem_local_evt",
+        placeholder="Ex.: Praia de Camburi"
     )
     cole1, cole2 = st.sidebar.columns(2)
     if cole1.button("💾 Salvar evento"):
-        tipo = (st.session_state["mem_chave"] or "").strip()
-        desc = (st.session_state["mem_valor"] or "").strip()
-        loc  = (st.session_state["mem_local"] or "").strip() or None
+        tipo = (tipo_evt or "").strip()
+        desc = (desc_evt or "").strip()
+        loc  = (loc_evt or "").strip() or None
         if tipo and desc:
             try:
                 register_event(usuario, tipo, desc, loc, {"fonte": "manual"})
                 st.sidebar.success(f"Evento salvo: {tipo}")
-                st.session_state["mem_chave"] = ""
-                st.session_state["mem_valor"] = ""
-                st.session_state["mem_local"] = ""
+                st.session_state["mem_chave_evt"] = ""
+                st.session_state["mem_valor_evt"] = ""
+                st.session_state["mem_local_evt"] = ""
+                st.rerun()
             except Exception as e:
                 st.sidebar.error(f"Falha ao salvar evento: {e}")
         else:
             st.sidebar.warning("Preencha tipo e descrição.")
     if cole2.button("🧽 Limpar campos (evento)"):
-        st.session_state["mem_chave"] = ""
-        st.session_state["mem_valor"] = ""
-        st.session_state["mem_local"] = ""
+        st.session_state["mem_chave_evt"] = ""
+        st.session_state["mem_valor_evt"] = ""
+        st.session_state["mem_local_evt"] = ""
+        st.rerun()
 
 # lista de fatos
 st.sidebar.markdown("**Fatos salvos**")
@@ -257,7 +266,7 @@ if _facts:
             try:
                 delete_fact(usuario, k)
                 st.sidebar.info(f"Fato apagado: {k}")
-                _rerun()
+                st.rerun()
             except Exception as e:
                 st.sidebar.error(f"Falha ao apagar fato: {e}")
 else:
@@ -280,7 +289,7 @@ if _evs:
             try:
                 delete_event_by_id(_id)
                 st.sidebar.info("Evento apagado.")
-                _rerun()
+                st.rerun()
             except Exception as e:
                 st.sidebar.error(f"Falha ao apagar evento: {e}")
 else:
