@@ -21,7 +21,7 @@ except Exception:
     def set_fact(*_a, **_k):
         return None
 
-# Utilitários de manutenção (podem não existir)
+# Utilitários de manutenção (podem não existir no repositório)
 try:
     from core.repositories import (
         delete_user_history,
@@ -30,10 +30,15 @@ try:
         reset_nsfw,  # opcional
     )
 except Exception:
-    def delete_user_history(_u: str): ...
-    def delete_last_interaction(_u: str): ...
-    def delete_all_user_data(_u: str): ...
-    def reset_nsfw(_u: str): ...
+    # stubs seguros (não fazem nada e não “enganam” a UI)
+    def delete_user_history(_u: str):
+        return None
+    def delete_last_interaction(_u: str) -> bool:
+        return False
+    def delete_all_user_data(_u: str):
+        return None
+    def reset_nsfw(_u: str):
+        return None
 
 # NSFW gate (opcional)
 try:
@@ -124,7 +129,10 @@ st.sidebar.caption(f"Local atual: {local_atual}")
 st.sidebar.caption(f"Provedor: **{provider}**")
 
 st.sidebar.markdown("---")
-st.session_state["auto_loc"] = st.sidebar.checkbox("📍 Inferir local automaticamente", value=st.session_state["auto_loc"])
+st.session_state["auto_loc"] = st.sidebar.checkbox(
+    "📍 Inferir local automaticamente",
+    value=st.session_state["auto_loc"]
+)
 
 # --- sidebar (manutenção) ---
 st.sidebar.subheader("🧹 Manutenção")
