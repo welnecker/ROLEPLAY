@@ -1,5 +1,5 @@
-# core/service.py
-from typing import List, Dict
+# core/service.py (apenas partes relevantes)
+from typing import List, Dict, Tuple
 from re import error as ReError
 
 from .persona import PERSONA_MARY, HISTORY_BOOT
@@ -8,88 +8,78 @@ from .rules import violou_mary, reforco_system
 from .locations import infer_from_prompt
 from .textproc import strip_metacena, formatar_roleplay_profissional
 from .tokens import toklen
+from .openrouter import chat as or_chat
 
-# provedores
-from .openrouter import chat as openrouter_chat
+# Together
 try:
-    from .together import chat as together_chat
+    from .together import chat as tg_chat, ProviderError
 except Exception:
-    together_chat = None  # fallback se Together não estiver disponível
+    tg_chat, ProviderError = None, RuntimeError
 
+TOGETHER_ALIASES = {
+    "together/meta-llama/llama-405b": "meta-llama/Meta-Llama-3.1-405B-Instruct-Turbo",
+    "together/meta-llama/llama-70b":  "meta-llama/Meta-Llama-3.1-70B-Instruct-Turbo",
+    "together/qwen/72b":              "Qwen/Qwen2.5-72B-Instruct",
+    "together/google/gemma-27b":      "google/gemma-2-27b-it",
+}
 
-def _route_chat(model: str, payload: dict) -> dict:
+def _norm_together_model(name: str) -> str:
+    if not name:
+        return name
+    if name.startswith("together/"):
+        # mantém alias inteiro para busca (case-insensitive)
+        alias = TOGETHER_ALIASES.get(name.lower())
+        return alias or name.split("/", 1)[1]  # remove "together/"
+    return name
+
+def _route_chat_strict(model: str, payload: dict) -> Tuple[dict, str, str]:
     """
-    Decide o provedor:
-      - 'together/<slug>' → Together (remove o prefixo antes de enviar)
-      - qualquer outro     → OpenRouter
+    STRICT MODE:
+    - Se modelo começa com "together/", usa somente Together.
+    - Se Together falhar, levanta ProviderError (NÃO cai em OpenRouter).
+    - Se modelo NÃO é together/, usa OpenRouter.
+    Retorna: (data_json, used_model, provider)
     """
     if model.startswith("together/"):
-        if not together_chat:
-            raise RuntimeError("Together não configurado (together_chat indisponível).")
-        true_model = model.split("/", 1)[1]
-        return together_chat({**payload, "model": true_model})
-    return openrouter_chat(payload)
+        if tg_chat is None:
+            raise ProviderError("Together indisponível (módulo não carregado).")
+        real = _norm_together_model(model)
 
+        # candidates: modelo pedido + (eventuais fallbacks dentro da Together)
+        fallbacks = {
+            "meta-llama/Meta-Llama-3.1-405B-Instruct-Turbo": [
+                "meta-llama/Meta-Llama-3.1-70B-Instruct-Turbo",
+                "Qwen/Qwen2.5-72B-Instruct",
+            ]
+        }.get(real, [])
+        attempts = [real] + fallbacks
 
-def _montar_historico(usuario: str, limite_tokens: int = 120_000) -> List[Dict[str, str]]:
-    """Constrói o histórico user/assistant respeitando o limite de tokens."""
-    docs = get_history_docs(usuario)
-    if not docs:
-        return HISTORY_BOOT[:]
+        errs = []
+        for m in attempts:
+            try:
+                data = tg_chat({**payload, "model": m})
+                return data, m, "together"
+            except ProviderError as e:
+                errs.append(f"{m}: {e}")
+                continue
+        # nada deu certo → propaga erro explícito
+        raise ProviderError(" / ".join(errs) or f"Together falhou para {real}")
 
-    total = 0
-    out: List[Dict[str, str]] = []
-    for d in reversed(docs):
-        u = d.get("mensagem_usuario") or ""
-        a = d.get("resposta_mary") or ""
-        t = toklen(u) + toklen(a)
-        if total + t > limite_tokens:
-            break
-        out.append({"role": "user", "content": u})
-        out.append({"role": "assistant", "content": a})
-        total += t
+    # modelo OpenRouter normal
+    data = or_chat(payload)
+    return data, model, "openrouter"
 
-    return list(reversed(out)) if out else HISTORY_BOOT[:]
-
-
-def _pos_processar_seguro(texto: str, max_frases_por_par: int = 3) -> str:
-    """
-    Pipeline de regex com saneamento de barras invertidas para evitar
-    erros do tipo 'bad escape \\c'.
-    """
-    if not texto:
-        return texto
-
-    # Sanear antes de aplicar regex
-    s = texto.replace("\\", "\\\\")
-    try:
-        s = strip_metacena(s)
-        s = formatar_roleplay_profissional(s, max_frases_por_par=max_frases_por_par)
-        return s.replace("\\\\", "\\")  # restaura para exibição
-    except ReError:
-        # Tentativa extra; se falhar, retorna original
-        try:
-            s2 = strip_metacena(s)
-            s2 = formatar_roleplay_profissional(s2, max_frases_por_par=max_frases_por_par)
-            return s2.replace("\\\\", "\\")
-        except ReError:
-            return texto
-
+# ... (demais funções iguais)
 
 def gerar_resposta(usuario: str, prompt_usuario: str, model: str) -> str:
-    """
-    Gera a resposta via provedor (OpenRouter/Together), aplica pós-processos
-    seguros, formata em parágrafos curtos e persiste a interação.
-    """
-    # 1) Inferir e fixar local, se detectado
+    # 1) Inferir e fixar local
     loc = infer_from_prompt(prompt_usuario) or ""
     if loc:
         set_fact(usuario, "local_cena_atual", loc, {"fonte": "service"})
 
-    # 2) Histórico + estilo + contexto de local
+    # 2) Histórico e estilo
     hist = _montar_historico(usuario)
     local_atual = get_fact(usuario, "local_cena_atual", "") or ""
-
     estilo_msg = {
         "role": "system",
         "content": (
@@ -97,13 +87,11 @@ def gerar_resposta(usuario: str, prompt_usuario: str, model: str) -> str:
             "desejo com classe; manter coerência estrita com o LOCAL_ATUAL."
         ),
     }
-
     messages: List[Dict[str, str]] = (
         [{"role": "system", "content": PERSONA_MARY}, estilo_msg]
         + hist
         + [{"role": "user", "content": f"LOCAL_ATUAL: {local_atual}\n\n{prompt_usuario}"}]
     )
-
     payload = {
         "model": model,
         "messages": messages,
@@ -112,20 +100,22 @@ def gerar_resposta(usuario: str, prompt_usuario: str, model: str) -> str:
         "top_p": 0.9,
     }
 
-    # 3) Chamada ao provedor (roteada)
-    data = _route_chat(model, payload)
+    # 3) Chamada STRICT (pode levantar ProviderError)
+    data, used_model, provider = _route_chat_strict(model, payload)
     resposta = (data.get("choices", [{}])[0].get("message", {}) or {}).get("content", "") or ""
 
-    # 4) Retry leve se violar regras duras (cabelo/curso/mãe etc.)
+    # 4) Retry leve com reforço se violar canônico
     if violou_mary(resposta):
-        payload_retry = {**payload, "messages": [messages[0], reforco_system()] + messages[1:]}
-        data2 = _route_chat(model, payload_retry)
+        data2, used_model, provider = _route_chat_strict(model, {**payload, "messages": [messages[0], reforco_system()] + messages[1:]})
         resposta = (data2.get("choices", [{}])[0].get("message", {}) or {}).get("content", "") or resposta
 
-    # 5) Pós-processamento SEGURO
-    resposta = _pos_processar_seguro(resposta, max_frases_por_par=3)
+    # 5) Pós-processo seguro
+    try:
+        resposta = strip_metacena(resposta.replace("\\", "\\\\"))
+        resposta = formatar_roleplay_profissional(resposta, max_frases_por_par=3).replace("\\\\", "\\")
+    except ReError:
+        pass
 
-    # 6) Persistir
-    save_interaction(usuario, prompt_usuario, resposta, model)
-
+    # 6) Persistir (modelo efetivo aparece com provedor)
+    save_interaction(usuario, prompt_usuario, resposta, f"{provider}:{used_model}")
     return resposta
