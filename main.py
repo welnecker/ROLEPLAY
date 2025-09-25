@@ -69,7 +69,7 @@ c1, c2 = st.columns([2,2])
 with c1:
     st.text_input("👤 Usuário", key="usuario")
 with c2:
-    st.selectbox("🎭 Personagem", ["Mary"], key="personagem")  # mantém só Mary aqui; outras depois
+    st.selectbox("🎭 Personagem", ["Mary", "Laura"], key="personagem")
 
 MODEL_OPTIONS = [
     # OpenRouter
@@ -78,8 +78,7 @@ MODEL_OPTIONS = [
     "thedrummer/anubis-70b-v1.1",
     "qwen/qwen3-max",
     "nousresearch/hermes-3-llama-3.1-405b",
-
-    # Together (se usar)
+    # Together
     "together/meta-llama/Meta-Llama-3.1-405B-Instruct-Turbo",
     "together/Qwen/Qwen2.5-72B-Instruct",
     "together/google/gemma-2-27b-it",
@@ -87,13 +86,13 @@ MODEL_OPTIONS = [
 st.selectbox("🧠 Modelo", MODEL_OPTIONS, key="modelo")
 
 usuario = st.session_state["usuario"]
-personagem = st.session_state["personagem"]  # "Mary"
+personagem = st.session_state["personagem"]  # "Mary" ou "Laura"
 modelo  = st.session_state["modelo"]
 
-# Compat total: Mary usa a chave antiga (aponta para os dados já existentes)
-usuario_key = usuario  # (para outras personagens, usaria f"{usuario}::nome")
+# chave de usuário por personagem (Mary usa legado; outras isolam)
+usuario_key = usuario if personagem == "Mary" else f"{usuario}::{personagem.lower()}"
 
-# --- carregar histórico (Mary) ---
+# --- carregar histórico por personagem ---
 if st.session_state["history_loaded_for"] != usuario_key:
     _reload_history(usuario_key)
 
@@ -108,6 +107,7 @@ provider = "Together" if modelo.startswith("together/") else "OpenRouter"
 
 st.sidebar.markdown(f"**NSFW:** {nsfw_badge}")
 st.sidebar.caption(f"Local atual: {local_atual}")
+st.sidebar.caption(f"Personagem: **{personagem}**")
 st.sidebar.caption(f"Provedor: **{provider}**")
 
 st.sidebar.markdown("---")
@@ -142,7 +142,7 @@ if evs:
 else:
     st.sidebar.caption("_Nenhum evento recente._")
 
-# forms para salvar fato/evento (sem mexer direto em st.session_state da key)
+# forms para salvar fato/evento
 with st.sidebar.form("form_fato", clear_on_submit=True):
     st.markdown("**Adicionar Fato**")
     f_chave = st.text_input("Chave", placeholder="ex.: parceiro_atual")
@@ -158,9 +158,9 @@ with st.sidebar.form("form_fato", clear_on_submit=True):
 
 with st.sidebar.form("form_evento", clear_on_submit=True):
     st.markdown("**Adicionar Evento**")
-    e_tipo  = st.text_input("Tipo", placeholder="ex.: primeira_vez")
+    e_tipo  = st.text_input("Tipo", placeholder="ex.: primeiro_encontro")
     e_desc  = st.text_area("Descrição", placeholder="texto curto factual", height=60)
-    e_local = st.text_input("Local (opcional)", placeholder="ex.: Praia de Camburi")
+    e_local = st.text_input("Local (opcional)", placeholder="ex.: Padaria do Zé")
     salvar_evento = st.form_submit_button("💾 Salvar evento")
     if salvar_evento and e_tipo.strip() and e_desc.strip():
         try:
@@ -170,6 +170,7 @@ with st.sidebar.form("form_evento", clear_on_submit=True):
         except Exception as e:
             st.error(f"Falha ao salvar evento: {e}")
 
+# --- sidebar: manutenção ---
 st.sidebar.markdown("---")
 st.sidebar.subheader("🧹 Manutenção")
 
@@ -201,17 +202,17 @@ if st.sidebar.button("🧨 Apagar TUDO (chat + memórias)"):
         delete_all_user_data(usuario_key)
         st.session_state["history"] = []
         st.session_state["history_loaded_for"] = None
-        st.sidebar.success("Tudo apagado para este usuário.")
+        st.sidebar.success("Tudo apagado para este personagem/usuário.")
         _rerun()
     except Exception as e:
         st.sidebar.error(f"Falha ao apagar tudo: {e}")
 
-# Atalho NSFW ON (registra canônico primeira_vez)
+# Atalho NSFW ON/OFF por personagem
 if st.sidebar.button("🔓 Marcar primeira vez (NSFW ON)"):
     try:
         set_fact(usuario_key, "virgem", False, {"fonte": "sidebar"})
-        register_event(usuario_key, "primeira_vez", "Mary e Janio tiveram sua primeira vez.", "motel status", {"origin": "sidebar"})
-        st.sidebar.success("NSFW liberado (virgem=False) e evento canônico registrado.")
+        register_event(usuario_key, "primeira_vez", f"{personagem} teve sua primeira vez.", "motel status", {"origin": "sidebar"})
+        st.sidebar.success("NSFW liberado e evento registrado.")
         _rerun()
     except Exception as e:
         st.sidebar.error(f"Falha ao marcar primeira vez: {e}")
@@ -219,12 +220,12 @@ if st.sidebar.button("🔓 Marcar primeira vez (NSFW ON)"):
 if st.sidebar.button("🔒 Forçar NSFW OFF"):
     try:
         reset_nsfw(usuario_key)
-        st.sidebar.success("NSFW desativado para este usuário.")
+        st.sidebar.success("NSFW desativado para este personagem/usuário.")
         _rerun()
     except Exception as e:
         st.sidebar.error(f"Falha ao forçar NSFW OFF: {e}")
 
-# --- render histórico existente ---
+# --- render histórico ---
 for role, content in st.session_state["history"]:
     if role == "user":
         with st.chat_message("user"):
@@ -234,7 +235,7 @@ for role, content in st.session_state["history"]:
             st.markdown(content)
 
 # --- input do chat ---
-if prompt := st.chat_input("Envie sua mensagem para Mary"):
+if prompt := st.chat_input(f"Envie sua mensagem para {personagem}"):
     with st.chat_message("user"):
         st.markdown(prompt)
     st.session_state["history"].append(("user", prompt))
@@ -249,7 +250,7 @@ if prompt := st.chat_input("Envie sua mensagem para Mary"):
 
     with st.spinner("Gerando..."):
         try:
-            resposta = gerar_resposta(usuario, prompt, model=modelo, character="Mary")
+            resposta = gerar_resposta(usuario, prompt, model=modelo, character=personagem)
         except Exception as e:
             resposta = f"Erro ao gerar resposta: {e}"
 
