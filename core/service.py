@@ -13,6 +13,28 @@ from .tokens import toklen
 # roteamento já existente (seu strict Together vs OpenRouter)
 from .service_router import route_chat_strict  # <= extraia sua função de roteamento aqui
 
+# no topo
+from .repositories import get_facts, last_event
+
+def _memory_context(usuario: str) -> str:
+    f = get_facts(usuario)
+    blocos = []
+    if "parceiro_atual" in f:
+        blocos.append(f"RELACIONAMENTO: parceiro_atual={f['parceiro_atual']}")
+    if "virgem" in f:
+        blocos.append(f"STATUS ÍNTIMO: virgem={bool(f['virgem'])}")
+    if "primeiro_encontro" in f:
+        blocos.append(f"PRIMEIRO_ENCONTRO: {f['primeiro_encontro']}")
+
+    ev = last_event(usuario, "primeira_vez")
+    if ev:
+        dt = ev.get("ts")
+        quando = dt.strftime("%Y-%m-%d %H:%M") if hasattr(dt, "strftime") else str(dt)
+        blocos.append(f"EVENTO_CANÔNICO: primeira_vez em {quando} @ {ev.get('local') or '—'}")
+
+    return "\n".join(blocos).strip()
+
+
 _FIRST_PERSON_FLAG = re.compile(r"(^|\n)\s*Mary\b", re.IGNORECASE)
 
 def _montar_historico(usuario: str, limite_tokens: int = 120_000) -> List[Dict[str, str]]:
