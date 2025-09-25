@@ -21,6 +21,20 @@ except Exception:
     def set_fact(*_a, **_k):
         return None
 
+# Utilitários de manutenção (podem não existir)
+try:
+    from core.repositories import (
+        delete_user_history,
+        delete_last_interaction,
+        delete_all_user_data,
+        reset_nsfw,  # opcional
+    )
+except Exception:
+    def delete_user_history(_u: str): ...
+    def delete_last_interaction(_u: str): ...
+    def delete_all_user_data(_u: str): ...
+    def reset_nsfw(_u: str): ...
+
 # NSFW gate (opcional)
 try:
     from core.nsfw import nsfw_enabled
@@ -42,8 +56,8 @@ st.title("Roleplay | Mary Massariol")
 # --- estado base ---
 st.session_state.setdefault("usuario", "welnecker")
 st.session_state.setdefault("modelo", "deepseek/deepseek-chat-v3-0324")
-st.session_state.setdefault("history", [])              # type: List[Tuple[str, str]]
-st.session_state.setdefault("history_loaded_for", None) # evita recarregar no rerun
+st.session_state.setdefault("history", [])               # type: List[Tuple[str, str]]
+st.session_state.setdefault("history_loaded_for", None)  # evita recarregar no rerun
 
 # --- controles de topo ---
 st.text_input("👤 Usuário", key="usuario")
@@ -66,7 +80,7 @@ if st.session_state["history_loaded_for"] != usuario:
     st.session_state["history"] = []
     try:
         docs = get_history_docs(usuario)
-        # docs já vêm em ordem cronológica (seu repositório faz sort ascendente)
+        # docs já vêm em ordem cronológica (asc) no repositório
         for d in docs:
             u = (d.get("mensagem_usuario") or "").strip()
             a = (d.get("resposta_mary") or "").strip()
@@ -87,6 +101,48 @@ except Exception:
 nsfw_badge = "✅ Liberado" if nsfw_enabled(usuario) else "🔒 Bloqueado"
 st.sidebar.markdown(f"**NSFW:** {nsfw_badge}")
 st.sidebar.caption(f"Local atual: {local_atual}")
+
+# --- sidebar (manutenção) ---
+st.sidebar.markdown("---")
+st.sidebar.subheader("🧹 Manutenção")
+
+colA, colB = st.sidebar.columns(2)
+if colA.button("🔄 Resetar histórico"):
+    try:
+        delete_user_history(usuario)
+        st.session_state["history"] = []
+        st.sidebar.success("Histórico apagado.")
+    except Exception as e:
+        st.sidebar.error(f"Falha ao resetar histórico: {e}")
+
+if colB.button("⏪ Apagar último turno"):
+    try:
+        delete_last_interaction(usuario)
+        # Remove da UI os últimos 2 registros (user + assistant), se existirem
+        if len(st.session_state["history"]) >= 2:
+            st.session_state["history"] = st.session_state["history"][:-2]
+        else:
+            st.session_state["history"] = []
+        st.sidebar.info("Último turno apagado.")
+    except Exception as e:
+        st.sidebar.error(f"Falha ao apagar último turno: {e}")
+
+if st.sidebar.button("🧨 Apagar TUDO (chat + memórias)"):
+    try:
+        delete_all_user_data(usuario)
+        st.session_state["history"] = []
+        st.session_state["history_loaded_for"] = None
+        st.sidebar.success("Tudo apagado para este usuário.")
+    except Exception as e:
+        st.sidebar.error(f"Falha ao apagar tudo: {e}")
+
+# opcional: volta a bloquear NSFW
+if st.sidebar.button("🔒 Forçar NSFW OFF"):
+    try:
+        reset_nsfw(usuario)
+        st.sidebar.success("NSFW desativado para este usuário.")
+    except Exception as e:
+        st.sidebar.error(f"Falha ao forçar NSFW OFF: {e}")
 
 # --- render histórico já existente ---
 for role, content in st.session_state["history"]:
