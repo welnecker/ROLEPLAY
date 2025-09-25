@@ -104,12 +104,12 @@ def _afeicao_policy_msg(local_atual: str, nsfw_on: bool) -> Dict[str, str]:
     elif not em_publico and not nsfw_on:
         content = (
             "CENA PRIVADA: Beijos longos, toques sugeridos e provocações são bem-vindos. "
-            "Evite descrição explícita detalhada; foco em sensação e clima."
+            "descrição explícita detalhada; foco em sensação e clima."
         )
     else:  # privado + nsfw_on
         content = (
-            "CENA PRIVADA COM NSFW ON: Pode avançar com mais intensidade, sempre consensual e elegante. "
-            "Mantenha classe; evite hiperdetalhamento gráfico."
+            "CENA PRIVADA COM NSFW ON: Pode avançar com total intensidade, sempre consensual e elegante. "
+            "Mantenha classe; hiperdetalhamento gráfico."
         )
     return {"role": "system", "content": content}
 
@@ -161,7 +161,7 @@ def _reforcar_primeira_pessoa(model: str, resposta: str) -> str:
         "model": model,
         "messages": rewriter,
         "max_tokens": 2048,
-        "temperature": 0.5,
+        "temperature": 0.7,
         "top_p": 0.9,
     })
     return (data.get("choices", [{}])[0].get("message", {}) or {}).get("content", "") or resposta
@@ -208,7 +208,7 @@ def gerar_resposta(usuario: str, prompt_usuario: str, model: str) -> str:
         "model": model,
         "messages": messages,
         "max_tokens": 2048,
-        "temperature": 0.6,
+        "temperature": 0.7,
         "top_p": 0.9,
     }
 
