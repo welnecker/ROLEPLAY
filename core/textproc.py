@@ -1,92 +1,84 @@
 # core/textproc.py
-from __future__ import annotations
 import re
 from typing import List
 
-# --- Remoção de metacena entre parênteses/colchetes no início de linha ---
-def strip_metacena(txt: str) -> str:
-    if not txt:
-        return txt
-    out_lines: List[str] = []
-    for ln in txt.replace("\r\n", "\n").split("\n"):
-        # remove "(...)" ou "[...]" no INÍCIO da linha
-        clean = re.sub(r"^[\(\[][^\)\]]*[\)\]]\s*", "", ln.strip())
-        out_lines.append(clean)
-    return "\n".join(out_lines).strip()
+# Split de sentenças seguro (evita dividir em abreviações simples e limpa espaços)
+_SENT_SPLIT_RE = re.compile(
+    r"""
+    (?<!\b[A-Z])         # evita dividir após iniciais soltas (heurística leve)
+    (?<=[.!?…])          # pontuação final de frase
+    ["')\]]*             # aspas/fechos opcionais logo após o ponto
+    \s+                  # espaçamento até a próxima
+    """,
+    re.VERBOSE | re.UNICODE
+)
 
-
-# --- Split de sentenças simples e robusto para PT (sem depender de bibliotecas externas) ---
-# 1) Quebra em fim de frase: ., !, ?, … (retém o separador)
-_SENT_END = re.compile(r"([\.!?…]+)(\s+|$)")
-
-def _split_sentences(txt: str) -> List[str]:
+def strip_think_blocks(text: str) -> str:
     """
-    Divide texto em sentenças preservando pontuação final.
-    Ex.: "Oi. Tudo bem?" -> ["Oi.", "Tudo bem?"]
+    Remove blocos <think>...</think> e tags soltas <think> </think>
+    que às vezes aparecem como 'raciocínio interno'.
     """
-    txt = (txt or "").strip()
-    if not txt:
+    if not text:
+        return text
+    s = re.sub(r"<\s*think\s*>.*?<\s*/\s*think\s*>", "", text, flags=re.DOTALL | re.IGNORECASE)
+    s = re.sub(r"</?\s*think\s*>", "", s, flags=re.IGNORECASE)
+    return s
+
+def strip_metacena(text: str) -> str:
+    """
+    Remove metacena do início de linha, ex.: "(sorrio)", "[olho]" etc.
+    Mantém o restante do conteúdo.
+    """
+    if not text:
+        return text
+    lines: List[str] = []
+    for ln in text.splitlines():
+        ln2 = re.sub(r"^\s*[\(\[][^\)\]]*[\)\]]\s*", "", ln.strip())
+        lines.append(ln2)
+    out = "\n".join(lines)
+    out = re.sub(r"\n{3,}", "\n\n", out)  # compacta múltiplas linhas em branco
+    return out.strip()
+
+def _split_sentences(text: str) -> List[str]:
+    """Quebra em sentenças e higieniza espaçamentos/pontuação."""
+    t = re.sub(r"\s+", " ", (text or "").strip())
+    if not t:
         return []
-    parts: List[str] = []
-    start = 0
-    for m in _SENT_END.finditer(txt):
-        end = m.end(1)  # inclui o(s) pontuador(es)
-        sent = txt[start:end].strip()
-        if sent:
-            parts.append(sent)
-        start = m.end(0)
-    # resto (se não terminar em pontuação)
-    tail = txt[start:].strip()
-    if tail:
-        parts.append(tail)
-    return parts
+    parts = _SENT_SPLIT_RE.split(t)
+    cleaned = []
+    for s in parts:
+        s = re.sub(r"\s+([,.;!?…])", r"\1", s.strip())  # remove espaço antes da pontuação
+        if s:
+            cleaned.append(s)
+    return cleaned
 
-
-# --- Empacotamento em parágrafos: 1–2 sentenças por parágrafo (configurável) ---
 def formatar_roleplay_profissional(texto: str, max_frases_por_par: int = 2) -> str:
     """
-    - Mantém parágrafos existentes se já houver quebras vazias (\\n\\n);
-    - Caso contrário, divide por sentenças e reempacota em blocos com até N sentenças;
-    - Garante separação por linha em branco entre parágrafos (\\n\\n).
+    Reorganiza o texto em parágrafos curtos (1–max_frases_por_par frases).
+    Não cria conteúdo novo; apenas reagrupa e higieniza espaços.
     """
     if not texto:
         return texto
 
-    t = texto.replace("\r\n", "\n")
-    # normaliza espaços, SEM apagar quebras já existentes de parágrafo
-    t = re.sub(r"[ \t]+", " ", t)
+    # Respeita quebras de parágrafo já existentes, mas refaz em blocos curtos
+    raw_paragraphs = [p for p in re.split(r"\n{2,}", texto) if p.strip()]
+    sentences: List[str] = []
+    for p in raw_paragraphs:
+        sentences.extend(_split_sentences(p))
 
-    # Se já tem parágrafos marcados por linhas em branco, respeita-os,
-    # mas ainda garante no-máximo N sentenças por parágrafo.
-    raw_parts = [p.strip() for p in re.split(r"\n{2,}", t) if p.strip()]
-    paragraphs: List[str] = []
+    if not sentences:
+        return texto.strip()
 
-    if len(raw_parts) > 1:
-        for part in raw_parts:
-            sents = _split_sentences(part)
-            if not sents:
-                continue
-            if len(sents) <= max_frases_por_par:
-                paragraphs.append(" ".join(sents))
-            else:
-                for i in range(0, len(sents), max_frases_por_par):
-                    chunk = " ".join(sents[i:i + max_frases_por_par]).strip()
-                    if chunk:
-                        paragraphs.append(chunk)
-    else:
-        # Não havia parágrafos: criar a partir de sentenças
-        sents = _split_sentences(t)
-        if not sents:
-            return t.strip()
-        for i in range(0, len(sents), max_frases_por_par):
-            chunk = " ".join(sents[i:i + max_frases_por_par]).strip()
-            if chunk:
-                paragraphs.append(chunk)
+    paras: List[str] = []
+    buf: List[str] = []
+    for s in sentences:
+        buf.append(s)
+        if len(buf) >= max_frases_por_par:
+            paras.append(" ".join(buf))
+            buf = []
+    if buf:
+        paras.append(" ".join(buf))
 
-    # Monta com quebra dupla (Markdown = parágrafo)
-    out = "\n\n".join(paragraphs).strip()
-
-    # Evita colar parágrafos por acaso:
-    out = re.sub(r"\n{3,}", "\n\n", out)
-
-    return out
+    out = "\n\n".join(paras)
+    out = re.sub(r"[ \t]+$", "", out, flags=re.MULTILINE)  # tira espaços à direita
+    return out.strip()
