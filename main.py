@@ -88,7 +88,7 @@ MODEL_OPTIONS = [
     "nousresearch/hermes-3-llama-3.1-405b",
     # Together
     "together/meta-llama/Meta-Llama-3.1-405B-Instruct-Turbo",
-    "together/Qwen/Qwen2.5-72B-Instruct",
+    "together/deepseek-ai/DeepSeek-R1-Distill-Llama-70B",
     "together/google/gemma-2-27b-it",
 ]
 st.selectbox("🧠 Modelo", MODEL_OPTIONS, key="modelo")
