@@ -12,31 +12,48 @@ from .rules import violou_mary, reforco_system
 from .locations import infer_from_prompt
 from .textproc import strip_metacena, formatar_roleplay_profissional
 from .tokens import toklen
-from .service_router import route_chat_strict  # roteador estrito (Together/OpenRouter)
+from .service_router import route_chat_strict
 from .nsfw import nsfw_enabled
 
+# -----------------------
+# Heurísticas de estilo
+# -----------------------
 
-# --- regex dinâmica para detectar escorregada para 3ª pessoa (Mary/Laura) ---
 def _make_third_person_flag(name: str) -> re.Pattern:
     safe = re.escape((name or "").strip())
     return re.compile(rf"(^|\n)\s*{safe}\b", re.IGNORECASE)
 
+# amacia tom autoritário/sarcástico
+_SOFT_REWRITES: List[Tuple[re.Pattern, str]] = [
+    (re.compile(r"\bespera\s+sentado\b", re.IGNORECASE), "me espera com calma"),
+    (re.compile(r"\bfica\s+quieta\b", re.IGNORECASE), "chega mais perto de mim"),
+    (re.compile(r"\bcal(a|e)-se\b", re.IGNORECASE), "vem aqui e me beija"),
+    (re.compile(r"\ba\s+conta\s+é\s+sua\b", re.IGNORECASE), "a gente vê a conta juntos"),
+    (re.compile(r"\bnão\s+me\s+faça\b", re.IGNORECASE), "não quero te pressionar"),
+]
 
-# --- memória canônica enxuta para dar continuidade ---
+def _amaciar_tom(txt: str) -> str:
+    out = txt
+    for pat, repl in _SOFT_REWRITES:
+        out = pat.sub(repl, out)
+    return out
+
+# -----------------------
+# Memória e histórico
+# -----------------------
+
 def _memory_context(usuario_key: str) -> str:
     try:
         f = get_facts(usuario_key) or {}
     except Exception:
         f = {}
     blocos: List[str] = []
-
     if f.get("parceiro_atual"):
         blocos.append(f"RELACIONAMENTO: parceiro_atual={f['parceiro_atual']}")
     if "virgem" in f:
         blocos.append(f"STATUS ÍNTIMO: virgem={bool(f['virgem'])}")
     if f.get("primeiro_encontro"):
         blocos.append(f"PRIMEIRO_ENCONTRO: {f['primeiro_encontro']}")
-
     try:
         ev = last_event(usuario_key, "primeira_vez")
     except Exception:
@@ -45,15 +62,9 @@ def _memory_context(usuario_key: str) -> str:
         dt = ev.get("ts")
         quando = dt.strftime("%Y-%m-%d %H:%M") if hasattr(dt, "strftime") else str(dt)
         blocos.append(f"EVENTO_CANÔNICO: primeira_vez em {quando} @ {ev.get('local') or '—'}")
-
     return "\n".join(blocos).strip()
 
-
-def _montar_historico(
-    usuario_key: str,
-    history_boot: List[Dict[str, str]],
-    limite_tokens: int = 120_000
-) -> List[Dict[str, str]]:
+def _montar_historico(usuario_key: str, history_boot: List[Dict[str, str]], limite_tokens: int = 120_000) -> List[Dict[str, str]]:
     docs = get_history_docs(usuario_key)
     if not docs:
         return history_boot[:]
@@ -70,105 +81,126 @@ def _montar_historico(
         total += t
     return list(reversed(out)) if out else history_boot[:]
 
+# -----------------------
+# NSFW: privado/deserto
+# -----------------------
 
-# --- amaciar tom: remove sarcasmo/autoritarismo e sugestiona convites ---
-_SOFT_REWRITES: List[Tuple[re.Pattern, str]] = [
-    (re.compile(r"\bespera\s+sentado\b", re.IGNORECASE), "me espera com calma"),
-    (re.compile(r"\bespera!\b", re.IGNORECASE), "me espera um pouquinho"),
-    (re.compile(r"\btraz\s+um\b", re.IGNORECASE), "se puder, traz um"),
-    (re.compile(r"\btraz\s+pra\s+mim\b", re.IGNORECASE), "se puder, traz pra mim"),
-    (re.compile(r"\ba\s+conta\s+é\s+sua\b", re.IGNORECASE), "a gente vê a conta juntos"),
-    (re.compile(r"\bpaga\s+a\s+conta\b", re.IGNORECASE), "a gente combina a conta"),
-    (re.compile(r"\bnão\s+me\s+faça\b", re.IGNORECASE), "não quero te pressionar"),
-    (re.compile(r"\bagora!\b", re.IGNORECASE), "agora, se você quiser"),
-]
+_PRIV_TOKENS = {
+    "apartamento", "apto", "quarto", "cama", "motel", "chalé", "cabana",
+    "carro estacionado", "carro parado", "garagem", "casa vazia", "banheiro",
+    "praia deserta", "praia vazia", "trilha deserta"
+}
 
+def _nsfw_on(usuario_key: str, local_atual: str, prompt: str) -> bool:
+    # se já liberado por evento/fato
+    if nsfw_enabled(usuario_key):
+        return True
+    t = f"{local_atual} {prompt}".lower()
+    if any(tok in t for tok in _PRIV_TOKENS):
+        return True
+    return False
 
-def _amaciar_tom(txt: str) -> str:
-    out = txt
-    for pat, repl in _SOFT_REWRITES:
-        out = pat.sub(repl, out)
-    return out
-
-
-def _pos_processar_seguro(texto: str, max_frases_por_par: int = 2) -> str:
-    if not texto:
-        return texto
-    s = texto.replace("\\", "\\\\")
-    try:
-        s = strip_metacena(s)
-        s = formatar_roleplay_profissional(s, max_frases_por_par=max_frases_por_par)
-        s = s.replace("\\\\", "\\")
-        s = _amaciar_tom(s)  # <= amacia tom autoritário/sarcástico (não mexe em vocabulário sexual)
-        return s
-    except ReError:
-        return texto
-
-
-def _style_guide_for(character: str) -> str:
+def _style_guide_for(character: str, nsfw: bool) -> str:
     base = (
-        "ESTILO GERAL: 1ª pessoa (eu). Tom adulto, direto e envolvente. "
-        "3–5 parágrafos; 1–2 frases por parágrafo. Frases curtas (4–12 palavras). "
-        "Sem parênteses/metacena. Sem diminutivos/infantilização. "
-        "Coerência estrita com LOCAL_ATUAL. Engaje diretamente com 'você' e crie ganchos."
+        "ESTILO: primeira pessoa (eu). Tom adulto, direto e envolvente. "
+        "3–5 parágrafos; 1–2 frases por parágrafo; frases curtas (4–12 palavras). "
+        "FALA DIRETA obrigatória em todo parágrafo (use travessão ou aspas). "
+        "Nada de metacena entre parênteses; nada de *asteriscos* narrativos. "
+        "Use verbos sensoriais: tocar, sussurrar, morder, lamber, apertar. "
+        "Engaje diretamente com 'você'. Mantenha coerência com LOCAL_ATUAL."
     )
-    if (character or "").strip().lower() == "laura":
-        extra = (
-            "LAURA: calorosa e gentil; sem sarcasmo; sem tom autoritário. "
-            "Prefira convites e perguntas suaves ('vamos', 'que tal'). "
-            "Flerte com humor leve e *pensamentos em itálico* quando natural. "
-            "Nunca insinuar cobrança/mercadoria; nunca impor tarefas."
+    persona_adj = (
+        "Para LAURA: zero sarcasmo e zero autoritarismo; convites e perguntas gentis."
+    )
+    if nsfw:
+        gate = (
+            "MODO_NSFW_LIBERADO: conteúdo sexual explícito adulto é permitido, "
+            "com consentimento claro e linguagem natural; pode usar 'foder', 'me come', 'gozar', etc. "
+            "Evite violência, humilhação, coerção, ilegalidades ou termos degradantes."
         )
-        return f"{base}\n{extra}"
-    return base
+    else:
+        gate = (
+            "MODO_SEGURO: sem sexo explícito; foque em química, flerte, beijo, toque insinuado."
+        )
+    if (character or "").strip().lower() == "laura":
+        return f"{base}\n{persona_adj}\n{gate}"
+    return f"{base}\n{gate}"
 
-
-def _fewshot_for(character: str) -> List[Dict[str, str]]:
+def _fewshot_for(character: str, nsfw: bool) -> List[Dict[str, str]]:
     name = (character or "Mary").strip().lower()
     if name == "laura":
+        if nsfw:
+            return [
+                {"role": "assistant", "content": "— Fecha a porta, vem cá. Eu te beijo devagar e guio tua mão pra minha cintura."},
+                {"role": "assistant", "content": "— Fala menos e me beija mais. Eu te puxo pro sofá e mordo teu lábio."},
+            ]
         return [
-            {"role": "assistant", "content": (
-                "Apoio o cotovelo no balcão e sorrio curto. — Cheguei mais cedo. "
-                "*Bom ter companhia sem pressa.* Que tal a gente pegar um café e sentar ali?"
-            )},
-            {"role": "assistant", "content": (
-                "Olho tua mensagem e respondo encostando na porta. — Tô a caminho. "
-                "Se der, pede um suco pra mim? *Hoje só quero conversar e te ouvir.*"
-            )},
+            {"role": "assistant", "content": "— Cheguei. Bora sentar ali? Eu quero te ouvir com calma."},
+            {"role": "assistant", "content": "— Traz um café pra mim? Eu prometo compensar com um sorriso."},
         ]
+    # Mary: mantém seu histórico/estilo original; sem fewshots extras.
     return []
 
+# -----------------------
+# Reescritas de garantia
+# -----------------------
+
+def _count_quotes(text: str) -> int:
+    # conta aspas e travessões que iniciam fala
+    quotes = text.count('"') + text.count("“") + text.count("”")
+    dashes = len(re.findall(r"(?:^|\n)\s*[—-]\s*", text))
+    return quotes + dashes
 
 def _precisa_primeira_pessoa(txt: str, character: str) -> bool:
+    # se aparece "Mary ..." ou "Laura ..." iniciando frase, é sinal de 3ª pessoa
     flag = _make_third_person_flag(character or "Mary")
     return bool(flag.search(txt))
 
-
-def _reforcar_primeira_pessoa(model: str, resposta: str) -> str:
+def _reforcar_dialogo_e_primeira_pessoa(model: str, resposta: str) -> str:
     rewriter = [
         {"role": "system", "content": (
-            "Reescreva o texto A SEGUIR em 1ª pessoa (eu/minha), tom adulto, direto e envolvente. "
-            "3–5 parágrafos; 1–2 frases por parágrafo; sem parênteses; sem diminutivos; sem infantilização."
+            "Reescreva em 1ª pessoa (eu), foco em FALA DIRETA. "
+            "Cada parágrafo deve conter fala com travessão ou aspas. "
+            "Sem parênteses/metacena; sem asteriscos. "
+            "Se for adulto, mantenha sensual e natural, sem pornografia mecânica."
         )},
         {"role": "user", "content": resposta}
     ]
     data, used_model, provider = route_chat_strict(model, {
         "model": model,
         "messages": rewriter,
-        "max_tokens": 2048,
+        "max_tokens": 1200,
         "temperature": 0.5,
         "top_p": 0.9,
     })
     return (data.get("choices", [{}])[0].get("message", {}) or {}).get("content", "") or resposta
 
+# -----------------------
+# Pós-processamento
+# -----------------------
+
+def _pos_processar_seguro(texto: str, max_frases_por_par: int = 2) -> str:
+    if not texto:
+        return texto
+    s = texto.replace("\\", "\\\\")
+    try:
+        s = strip_metacena(s)  # remove [LOCAL], (metacena) etc.
+        s = formatar_roleplay_profissional(s, max_frases_por_par=max_frases_por_par)
+        s = s.replace("\\\\", "\\")
+        s = _amaciar_tom(s)
+        return s
+    except ReError:
+        return texto
+
+# -----------------------
+# Entrada principal
+# -----------------------
 
 def gerar_resposta(usuario: str, prompt_usuario: str, model: str, character: str = "Mary") -> str:
     """
     - Mary usa `usuario` puro (compat com dados antigos).
     - Outras personagens usam `usuario::<personagem>` para isolar histórico/memória.
-    - NSFW sensorial liberado quando nsfw_enabled(usuario_key) == True:
-        permite vocabulário explícito (ex.: 'foder', 'me come', 'gozar', 'meter').
-        Sempre com consentimento; sem menores; sem violência sexual; sem bestialidade; sem conteúdos ilegais.
+    - Respostas em 1ª pessoa, com fala direta por parágrafo; NSFW sensorial quando permitido.
     """
     char = (character or "Mary").strip()
     persona_text, history_boot = get_persona(char)
@@ -184,32 +216,12 @@ def gerar_resposta(usuario: str, prompt_usuario: str, model: str, character: str
     local_atual = get_fact(usuario_key, "local_cena_atual", "") or ""
     memo = _memory_context(usuario_key)
 
-    estilo_msg = {"role": "system", "content": _style_guide_for(char)}
-    few = _fewshot_for(char)
-
-    # 2.1) Gate NSFW -> mensagem explícita de modo
-    try:
-        nsfw_on = bool(nsfw_enabled(usuario_key))
-    except Exception:
-        nsfw_on = False
-
-    if nsfw_on:
-        mode_text = (
-            "MODO_NSFW_LIBERADO: Cenas sexuais explícitas permitidas; linguagem direta e sensorial. "
-            "É permitido usar termos como 'foder', 'me come', 'meter', 'gozar', 'gozo', 'porra', 'meter fundo', etc. "
-            "Priorize contato físico, sensações, ritmo, respiração, calor, texturas e diálogo quente. "
-            "Consentimento explícito. Proibido menores, incesto, violência sexual, bestialidade e atividades ilegais. "
-            "Evite gore e hiper-detalhe clínico; foque em prazer mútuo e química adulta."
-        )
-    else:
-        mode_text = (
-            "MODO_SEGURO: Sem cenas sexuais explícitas; foque em tensão, clima, diálogo e toques sugeridos."
-        )
-
-    mode_msg = {"role": "system", "content": mode_text}
+    nsfw = _nsfw_on(usuario_key, local_atual, prompt_usuario)
+    estilo_msg = {"role": "system", "content": _style_guide_for(char, nsfw)}
+    few = _fewshot_for(char, nsfw)
 
     messages: List[Dict[str, str]] = (
-        [{"role": "system", "content": persona_text}, estilo_msg, mode_msg]
+        [{"role": "system", "content": persona_text}, estilo_msg]
         + (few if few else [])
         + hist
         + [{
@@ -226,8 +238,8 @@ def gerar_resposta(usuario: str, prompt_usuario: str, model: str, character: str
         "model": model,
         "messages": messages,
         "max_tokens": 2048,
-        "temperature": 0.6,
-        "top_p": 0.9,
+        "temperature": 0.65,
+        "top_p": 0.95,
     }
 
     # 3) chamada (STRICT, sem fallback escondido)
@@ -239,14 +251,16 @@ def gerar_resposta(usuario: str, prompt_usuario: str, model: str, character: str
         data2, _, _ = route_chat_strict(model, {**payload, "messages": [messages[0], reforco_system()] + messages[1:]})
         resposta = (data2.get("choices", [{}])[0].get("message", {}) or {}).get("content", "") or resposta
 
-    # 5) Garantir 1ª pessoa se escorregar pra 3ª
-    if _precisa_primeira_pessoa(resposta, char):
+    # 5) Garantias de estilo: 1ª pessoa + diálogo
+    need_i = _precisa_primeira_pessoa(resposta, char)
+    need_quotes = (_count_quotes(resposta) < 2)
+    if need_i or need_quotes:
         try:
-            resposta = _reforcar_primeira_pessoa(model, resposta)
+            resposta = _reforcar_dialogo_e_primeira_pessoa(model, resposta)
         except Exception:
             pass
 
-    # 6) Pós-processo (quebra parágrafos + amaciar tom) — não altera vocabulário sexual permitido
+    # 6) Pós-processo (quebra parágrafos + amaciar tom)
     resposta = _pos_processar_seguro(resposta, max_frases_por_par=2)
 
     # 7) Persistir
