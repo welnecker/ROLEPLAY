@@ -90,7 +90,7 @@ MODEL_OPTIONS = [
     "together/meta-llama/Meta-Llama-3.1-405B-Instruct-Turbo",
     "together/deepseek-ai/DeepSeek-R1",
     "together/google/gemma-2-27b-it",
-    "together/Qwen/Qwen2.5-VL-72B-Instruct",
+    "together/deepseek-ai/DeepSeek-R1-Distill-Qwen-14B",
     ]
 st.selectbox("🧠 Modelo", MODEL_OPTIONS, key="modelo")
 
