@@ -90,7 +90,8 @@ c1, c2 = st.columns([2,2])
 with c1:
     st.text_input("👤 Usuário", key="ui_usuario")
 with c2:
-    st.selectbox("🎭 Personagem", ["Mary", "Laura"], key="ui_personagem")
+    # ADICIONADO: Narith (Elfa)
+    st.selectbox("🎭 Personagem", ["Mary", "Laura", "Narith"], key="ui_personagem")
 
 MODEL_OPTIONS = [
     # OpenRouter
@@ -112,7 +113,7 @@ st.session_state["personagem"] = st.session_state["ui_personagem"]
 st.session_state["modelo"]     = st.session_state["ui_modelo"]
 
 usuario    = st.session_state["usuario"]
-personagem = st.session_state["personagem"]  # "Mary" ou "Laura"
+personagem = st.session_state["personagem"]  # "Mary" | "Laura" | "Narith"
 modelo     = st.session_state["modelo"]
 
 # chave de usuário por personagem (Mary usa legado; outras isolam)
