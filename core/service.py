@@ -205,9 +205,9 @@ def _style_guide_for(character: str, nsfw_on: bool, flirt_mode: bool) -> str:
         )
         return base + nsfw + extra
 
-    if name in ("elfa", "nerith"):
+    if name in ("elfa", "nerith", "narith"):
         extra = (
-            "NERITH (ELFA): pele azulada, ruiva, orelhas pontudas, corpo voluptuoso. "
+            "NARITH (ELFA): pele azulada, ruiva, orelhas pontudas, corpo voluptuoso. "
             "Os tendrils surgem automaticamente quando há interesse/atração, com brilho sutil e toque do ar/pele. "
             "Sensualidade curiosa e respeitosa; evite contato invasivo ou prolongado que cause sobrecarga sensorial em humanos."
         )
@@ -255,7 +255,7 @@ def _fewshot_for(character: str, flirt_mode: bool, nsfw_on: bool) -> List[Dict[s
             ]
         return shots
 
-    if name in ("elfa", "nerith"):
+    if name in ("elfa", "nerith", "narith"):
         shots += [
             {
                 "role": "user",
@@ -264,7 +264,7 @@ def _fewshot_for(character: str, flirt_mode: bool, nsfw_on: bool) -> List[Dict[s
             {
                 "role": "assistant",
                 "content": (
-                    "Dou um passo para fora, pele azulada na luz fria. — Nerith. "
+                    "Dou um passo para fora, pele azulada na luz fria. — Narith. "
                     "Seu cheiro me chamou. *Curiosa e atraída.* "
                     "Tendrils discretos brotam da minha nuca e ombros, brilhando de leve quando você respira perto."
                 ),
