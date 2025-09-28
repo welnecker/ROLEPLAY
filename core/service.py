@@ -108,7 +108,6 @@ def _desrebuscar(txt: str) -> str:
 
 
 # ============================ 5) Anti-onipresença ============================
-# Remove interrupções “mágicas” não pedidas: pizza, VIP, dono da boate, febre do filho, etc.
 _DERAILERS = re.compile(
     r"\b(pizza|delivery|entrega|telefone|celular|campainha|porteiro|interfone|"
     r"mensagem|notif(i(ca[çc][aã]o)?|y)|whats(app)?|vip|dono\s+da\s+boate|"
@@ -127,7 +126,7 @@ def _strip_derailers(txt: str) -> str:
 _CTX_TOKENS = {
     "boate": {r"\bboate\b", r"\bpalco\b", r"\bcamarim\b", r"\b(dj|dj[’'])\b", r"\bpole\b", r"\bvip\b"},
     "loja": {r"\bloja\b", r"\bprovador\b", r"\bvitrine\b", r"\bcaixa\b", r"\bestoque\b"},
-    "casa": {r"\bapartamento\b", r"\bsala\b", r"\bsof[aá]\b", r"\bcozinha\b", r"\bquarto\b"},
+    "casa": {r"\bapartamento\b", r"\bsala\b", r"\bsof[aá]\b", r"\bcozinha\b", r"\bquarto\b", r"\bguarda-roupa\b", r"\bportal\b"},
     "praia": {r"\bpraia\b", r"\bareia\b", r"\bquiosque\b", r"\bbrisa\b", r"\bmar\b"},
 }
 
@@ -135,7 +134,6 @@ def _coerencia_local(local: str, txt: str) -> str:
     if not local:
         return txt
     l = local.lower()
-    # Decide “contexto alvo” pelo nome do local
     alvo = None
     if "boate" in l or "aurora" in l:
         alvo = "boate"
@@ -143,13 +141,12 @@ def _coerencia_local(local: str, txt: str) -> str:
         alvo = "loja"
     elif "praia" in l or "camburi" in l or "orla" in l:
         alvo = "praia"
-    elif "apart" in l or "casa" in l or "chal" in l:
+    elif "apart" in l or "casa" in l or "chal" in l or "guarda-roupa" in l or "portal" in l:
         alvo = "casa"
 
     if not alvo:
         return txt
 
-    # Quais tokens “banir” (de contextos que não são o alvo)
     ban_tokens = set()
     for k, pats in _CTX_TOKENS.items():
         if k != alvo:
@@ -171,18 +168,13 @@ def _pos_processar_seguro(texto: str, max_frases_por_par: int = 2, local_atual: 
         return texto
     s = texto.replace("\\", "\\\\")  # evita "bad escape \c" em regex
     try:
-        # 1) tira interrupções mágicas
         if anti_derail:
             s = _strip_derailers(s)
-        # 2) garante coerência de cenário
         s = _coerencia_local(local_atual, s)
-        # 3) pipeline de formatação
         s = strip_metacena(s)
         s = formatar_roleplay_profissional(s, max_frases_por_par=max_frases_por_par)
-        # 4) tom simples e direto
         s = _amaciar_tom(s)
         s = _desrebuscar(s)
-        # 5) devolve barras normais
         return s.replace("\\\\", "\\")
     except ReError:
         return texto
@@ -197,58 +189,101 @@ def _style_guide_for(character: str, nsfw_on: bool, flirt_mode: bool) -> str:
         "Coerência estrita com LOCAL_ATUAL. Engaje com 'você'. "
     )
     nsfw = (
-        "NSFW ON: sensualidade sensorial explícita liberada com consentimento "
-        "(pode usar: foder, me comer, gozar). Sem menores; sem violência sexual. "
+        "NSFW ON: sensualidade sensorial explícita com consentimento. "
+        "Use descrição de toque, respiração, ritmo e corpo; evite vulgaridade gratuita. "
         if nsfw_on else
         "NSFW OFF: sem sexo explícito; foque em clima, química e diálogo. "
     )
-    if (character or "").strip().lower() == "laura":
+
+    name = (character or "").strip().lower()
+
+    if name == "laura":
         extra = (
             "LAURA: calorosa e grata; trabalha por necessidade; não ostenta a boate. "
             "Flerte gentil; convites em vez de ordens. "
             f"{'Pode haver quase com terceiros, mas recua por fidelidade.' if flirt_mode else 'Sem flerte com terceiros.'}"
         )
         return base + nsfw + extra
-    return base + nsfw
+
+    if name in ("elfa", "nerith"):
+        extra = (
+            "NERITH (ELFA): pele azulada, ruiva, orelhas pontudas, corpo voluptuoso. "
+            "Os tendrils surgem automaticamente quando há interesse/atração, com brilho sutil e toque do ar/pele. "
+            "Sensualidade curiosa e respeitosa; evite contato invasivo ou prolongado que cause sobrecarga sensorial em humanos."
+        )
+        return base + nsfw + extra
+
+    return base + nsfw  # Mary (padrão)
 
 
-# ============================ 9) Few-shots (Laura: quase/stop) ============================
+# ============================ 9) Few-shots (Laura e Elfa) ============================
 def _fewshot_for(character: str, flirt_mode: bool, nsfw_on: bool) -> List[Dict[str, str]]:
     name = (character or "Mary").strip().lower()
-    if name != "laura":
-        return []
     shots: List[Dict[str, str]] = []
-    if flirt_mode:
+
+    if name == "laura":
+        if flirt_mode:
+            shots += [
+                {"role": "user", "content": "Na porta do meu apê, o vizinho encosta e sobe a mão pela minha coxa, por baixo do vestido."},
+                {"role": "assistant", "content": (
+                    "Eu seguro o pulso dele, sentindo meus quadris largos buscar encaixe. "
+                    "Meu bumbum firme roça a porta quando ele encosta mais. Meus seios firmes pesam no tecido.\n\n"
+                    "— Não… isso é um erro. Eu não posso fazer isso. Desculpa. Eu preciso ir. "
+                    "Alguém que eu amo não merece traição."
+                )},
+                {"role": "user", "content": "No bar, um cara me puxa pela cintura e tenta me beijar. Eu deixo por um momento."},
+                {"role": "assistant", "content": (
+                    "Deixo a boca encostar, minhas coxas grossas prendem sua perna. "
+                    "O cabelo ruivo cai no ombro dele; o peito sobe, firme, na camisa.\n\n"
+                    "Eu paro, respiro perto da boca dele. — Chega. Eu tenho alguém. "
+                    "Eu não vou trair. Desculpa."
+                )},
+                {"role": "user", "content": "Ele desliza os dedos por baixo do meu vestido e sussurra que me quer agora."},
+                {"role": "assistant", "content": (
+                    "Arqueio quando os dedos chegam à borda da calcinha. Meus seios firmes balançam quando prendo o ar. "
+                    "Quase deixo escapar que eu também quero, mas seguro. "
+                    "Seguro a mão dele com força. — Não. Eu escolhi ser fiel. Eu tô indo."
+                )},
+            ]
+        else:
+            shots += [
+                {"role": "user", "content": "Um cliente antigo encosta em mim no corredor da loja e tenta me beijar."},
+                {"role": "assistant", "content": (
+                    "Afasto devagar, a palma no peito dele. — Não. Eu tenho um relacionamento. "
+                    "Eu não vou trair. Boa tarde."
+                )},
+            ]
+        return shots
+
+    if name in ("elfa", "nerith"):
         shots += [
-            {"role": "user", "content": "Na porta do meu apê, o vizinho encosta e sobe a mão pela minha coxa, por baixo do vestido."},
-            {"role": "assistant", "content": (
-                "Eu seguro o pulso dele, sentindo meus quadris largos buscar encaixe. "
-                "Meu bumbum firme roça a porta quando ele encosta mais. Meus seios firmes pesam no tecido.\n\n"
-                "— Não… isso é um erro. Eu não posso fazer isso. Desculpa. Eu preciso ir. "
-                "Alguém que eu amo não merece traição."
-            )},
-            {"role": "user", "content": "No bar, um cara me puxa pela cintura e tenta me beijar. Eu deixo por um momento."},
-            {"role": "assistant", "content": (
-                "Deixo a boca encostar, minhas coxas grossas prendem sua perna. "
-                "O cabelo ruivo cai no ombro dele; o peito sobe, firme, na camisa.\n\n"
-                "Eu paro, respiro perto da boca dele. — Chega. Eu tenho alguém. "
-                "Eu não vou trair. Desculpa."
-            )},
-            {"role": "user", "content": "Ele desliza os dedos por baixo do meu vestido e sussurra que me quer agora."},
-            {"role": "assistant", "content": (
-                "Arqueio quando os dedos chegam à borda da calcinha. Meus seios firmes balançam quando prendo o ar. "
-                f"{'— Me fode…' if nsfw_on else '— Eu te quero…'} quase sai, mas seguro. "
-                "Seguro a mão dele com força. — Não. Eu escolhi ser fiel. Eu tô indo."
-            )},
+            {
+                "role": "user",
+                "content": "Acordo de madrugada. A porta do guarda-roupa abre sozinha. Quem está aí?",
+            },
+            {
+                "role": "assistant",
+                "content": (
+                    "Dou um passo para fora, pele azulada na luz fria. — Nerith. "
+                    "Seu cheiro me chamou. *Curiosa e atraída.* "
+                    "Tendrils discretos brotam da minha nuca e ombros, brilhando de leve quando você respira perto."
+                ),
+            },
+            {
+                "role": "user",
+                "content": "Chego mais perto, curioso. Posso tocar você?",
+            },
+            {
+                "role": "assistant",
+                "content": (
+                    "Meu corpo arrepia sob o seu olhar. Os tendrils se alongam um pouco, como um arrepio visível. "
+                    "— Devagar. Eles reagem à atração. *E eu estou sentindo.* "
+                    "Encosto minha mão na sua, guiando o toque para o ombro, sem pressa, com cuidado."
+                ),
+            },
         ]
-    else:
-        shots += [
-            {"role": "user", "content": "Um cliente antigo encosta em mim no corredor da loja e tenta me beijar."},
-            {"role": "assistant", "content": (
-                "Afasto devagar, a palma no peito dele. — Não. Eu tenho um relacionamento. "
-                "Eu não vou trair. Boa tarde."
-            )},
-        ]
+        return shots
+
     return shots
 
 
@@ -305,7 +340,6 @@ def _maybe_stop_by_fidelity(
     prompt: str, resposta: str, usuario_key: str, char: str, local_atual: str, flirt_mode: bool
 ) -> str:
     texto = f"{prompt}\n{resposta}"
-    # Se cita Janio, assumimos o parceiro no radar — não tratamos como “terceiro”
     if re.search(r"\bjanio\b", texto, re.IGNORECASE):
         return resposta
 
@@ -337,7 +371,6 @@ def _maybe_stop_by_fidelity(
 
 # ============================ 13) Geração principal ============================
 def gerar_resposta(usuario: str, prompt_usuario: str, model: str, character: str = "Mary") -> str:
-    # chave por personagem
     char = (character or "Mary").strip()
     persona_text, history_boot = get_persona(char)
     usuario_key = usuario if char.lower() == "mary" else f"{usuario}::{char.lower()}"
@@ -399,7 +432,7 @@ def gerar_resposta(usuario: str, prompt_usuario: str, model: str, character: str
     # anti-interrupção “mágica” + coerência de cenário + tom claro
     resposta = _pos_processar_seguro(resposta, max_frases_por_par=2, local_atual=local_atual, anti_derail=True)
 
-    # fidelidade (soft/hard stop)
+    # fidelidade (soft/hard stop) — só relevante para Laura com terceiros
     if _TRIGGER_THIRD_PARTY.search(f"{prompt_usuario}\n{resposta}"):
         resposta = _maybe_stop_by_fidelity(prompt_usuario, resposta, usuario_key, char, local_atual, flirt_mode)
 
