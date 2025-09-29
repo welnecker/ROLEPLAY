@@ -90,7 +90,6 @@ c1, c2 = st.columns([2,2])
 with c1:
     st.text_input("👤 Usuário", key="ui_usuario")
 with c2:
-    # ADICIONADO: Narith (Elfa)
     st.selectbox("🎭 Personagem", ["Mary", "Laura", "Narith"], key="ui_personagem")
 
 MODEL_OPTIONS = [
@@ -280,13 +279,39 @@ for role, content in st.session_state["history"]:
         with st.chat_message("assistant", avatar="💚"):
             st.markdown(content)
 
-# ---------- input do chat ----------
-if prompt := st.chat_input(f"Envie sua mensagem para {personagem}"):
-    with st.chat_message("user"):
-        st.markdown(prompt)
-    st.session_state["history"].append(("user", prompt))
+# ---------- CONTINUAR (botão) + input do chat ----------
+st.write("")  # espaçamento antes do rodapé
+continuar_clicked = st.button(
+    "▶️ Continuar",
+    key="btn_continuar",
+    help="Seguir a cena a partir da última resposta, mantendo o mesmo local e personagens."
+)
 
-    if st.session_state["auto_loc"]:
+user_prompt = st.chat_input(f"Envie sua mensagem para {personagem}")
+
+# Resolve a intenção final desta iteração
+prompt: Optional[str] = None
+is_auto_continue = False
+
+if continuar_clicked and not user_prompt:
+    # Prompt especial para continuação lógica (sem mudar local)
+    prompt = (
+        "CONTINUAR: Prossiga a cena exatamente de onde a última resposta parou. "
+        "Mantenha LOCAL_ATUAL, personagens presentes e tom. Não resuma; apenas avance a ação e o diálogo em 1ª pessoa."
+    )
+    is_auto_continue = True
+elif user_prompt:
+    prompt = user_prompt
+
+# ---------- ciclo de geração ----------
+if prompt:
+    # mostra e guarda a mensagem do usuário (ou “Continuar”)
+    with st.chat_message("user"):
+        st.markdown("🔁 **Continuar**" if is_auto_continue else prompt)
+    st.session_state["history"].append(("user", "🔁 Continuar" if is_auto_continue else prompt))
+
+    # Inferir/fixar local APENAS quando veio texto do usuário
+    if (not is_auto_continue) and st.session_state["auto_loc"]:
         try:
             loc = infer_location(prompt)
             if loc:
@@ -294,12 +319,14 @@ if prompt := st.chat_input(f"Envie sua mensagem para {personagem}"):
         except Exception:
             pass
 
+    # gerar resposta
     with st.spinner("Gerando..."):
         try:
             resposta = gerar_resposta(usuario, prompt, model=modelo, character=personagem)
         except Exception as e:
             resposta = f"Erro ao gerar resposta: {e}"
 
+    # mostrar e guardar a resposta
     with st.chat_message("assistant", avatar="💚"):
         st.markdown(resposta)
     st.session_state["history"].append(("assistant", resposta))
