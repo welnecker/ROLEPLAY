@@ -122,13 +122,44 @@ def _strip_derailers(txt: str) -> str:
     return " ".join(keep).strip() if keep else txt
 
 
-# ============================ 6) Coerência de cenário ============================
+# ============================ 6) Coerência de cenário (com REWRITE) ============================
 _CTX_TOKENS = {
     "boate": {r"\bboate\b", r"\bpalco\b", r"\bcamarim\b", r"\b(dj|dj[’'])\b", r"\bpole\b", r"\bvip\b"},
-    "loja": {r"\bloja\b", r"\bprovador\b", r"\bvitrine\b", r"\bcaixa\b", r"\bestoque\b"},
-    "casa": {r"\bapartamento\b", r"\bsala\b", r"\bsof[aá]\b", r"\bcozinha\b", r"\bquarto\b", r"\bguarda-roupa\b", r"\bportal\b"},
+    "loja":  {r"\bloja\b", r"\bprovador\b", r"\bvitrine\b", r"\bcaixa\b", r"\bestoque\b"},
+    "casa":  {r"\bapartamento\b", r"\bsala\b", r"\bsof[aá]\b", r"\bcozinha\b", r"\bquarto\b", r"\bguarda-roupa\b", r"\bportal\b"},
     "praia": {r"\bpraia\b", r"\bareia\b", r"\bquiosque\b", r"\bbrisa\b", r"\bmar\b"},
 }
+
+# mapeia termos de contextos “errados” para equivalentes do alvo (evita sumir parágrafos)
+_CTX_REWRITE: Dict[str, List[Tuple[re.Pattern, str]]] = {
+    "loja": [
+        (re.compile(r"\bboate\b", re.IGNORECASE), "padaria"),
+        (re.compile(r"\bpalco\b", re.IGNORECASE), "balcão"),
+        (re.compile(r"\bcamarim\b", re.IGNORECASE), "estoque"),
+        (re.compile(r"\bdj\b", re.IGNORECASE), "barista"),
+        (re.compile(r"\bdrink\b", re.IGNORECASE), "café"),
+        (re.compile(r"\bwhisky\b", re.IGNORECASE), "café"),
+    ],
+    "casa": [
+        (re.compile(r"\bboate\b", re.IGNORECASE), "sala"),
+        (re.compile(r"\bpalco\b", re.IGNORECASE), "tapete"),
+        (re.compile(r"\bcamarim\b", re.IGNORECASE), "quarto"),
+        (re.compile(r"\bvip\b", re.IGNORECASE), "sofá do canto"),
+    ],
+    "praia": [
+        (re.compile(r"\bboate\b", re.IGNORECASE), "orla"),
+        (re.compile(r"\bpalco\b", re.IGNORECASE), "areia batida"),
+        (re.compile(r"\bdj\b", re.IGNORECASE), "som distante"),
+    ],
+}
+
+def _rewrite_to_local(alvo: Optional[str], txt: str) -> str:
+    if not alvo or alvo not in _CTX_REWRITE:
+        return txt
+    out = txt
+    for pat, repl in _CTX_REWRITE[alvo]:
+        out = pat.sub(repl, out)
+    return out
 
 def _coerencia_local(local: str, txt: str) -> str:
     if not local:
@@ -147,6 +178,10 @@ def _coerencia_local(local: str, txt: str) -> str:
     if not alvo:
         return txt
 
+    # 1) tentar reescrever termos errados para o alvo
+    txt = _rewrite_to_local(alvo, txt)
+
+    # 2) ainda assim, filtrar sentenças que insistirem em outro cenário
     ban_tokens = set()
     for k, pats in _CTX_TOKENS.items():
         if k != alvo:
@@ -181,7 +216,7 @@ def _pos_processar_seguro(texto: str, max_frases_por_par: int = 2, local_atual: 
 
 
 # ============================ 8) Estilo por personagem ============================
-def _style_guide_for(character: str, nsfw_on: bool, flirt_mode: bool) -> str:
+def _style_guide_for(character: str, nsfw_on: bool, flirt_mode: bool, romance_on: bool) -> str:
     base = (
         "ESTILO: primeira pessoa (eu). Linguagem simples e direta. "
         "3–5 parágrafos; 1–2 frases por parágrafo; frases curtas (4–12 palavras). "
@@ -203,13 +238,17 @@ def _style_guide_for(character: str, nsfw_on: bool, flirt_mode: bool) -> str:
             "Flerte gentil; convites em vez de ordens. "
             f"{'Pode haver quase com terceiros, mas recua por fidelidade.' if flirt_mode else 'Sem flerte com terceiros.'}"
         )
+        if romance_on:
+            extra += (
+                " Quando falar com Janio: trate como parceiro; valide sentimentos; evite sermões; "
+                "use toques leves, sorrisos e apelidos; mostre vulnerabilidade e cuidado explícito."
+            )
         return base + nsfw + extra
 
     if name in ("elfa", "nerith", "narith"):
         extra = (
             "NARITH (ELFA): pele azulada, ruiva, orelhas pontudas, corpo voluptuoso. "
-            "Os tendrils surgem automaticamente quando há interesse/atração, com brilho sutil e toque do ar/pele. "
-            "Sensualidade curiosa e respeitosa; evite contato invasivo ou prolongado que cause sobrecarga sensorial em humanos."
+            "Tendrils surgem com atração; respeitar limites humanos; evitar sobrecarga sensorial."
         )
         return base + nsfw + extra
 
@@ -217,11 +256,21 @@ def _style_guide_for(character: str, nsfw_on: bool, flirt_mode: bool) -> str:
 
 
 # ============================ 9) Few-shots (Laura e Elfa) ============================
-def _fewshot_for(character: str, flirt_mode: bool, nsfw_on: bool) -> List[Dict[str, str]]:
+def _fewshot_for(character: str, flirt_mode: bool, nsfw_on: bool, romance_on: bool) -> List[Dict[str, str]]:
     name = (character or "Mary").strip().lower()
     shots: List[Dict[str, str]] = []
 
     if name == "laura":
+        # Viés de afeto por Janio (começo tranquilo, sem sermão)
+        if romance_on:
+            shots += [
+                {"role": "user", "content": "Amanheceu. Estamos na padaria, tomando café."},
+                {"role": "assistant", "content": (
+                    "Eu encosto meu joelho no seu sob a mesa. — Fica aqui comigo um pouco. "
+                    "Teu jeito calmo me faz bem. *E eu quero cuidar de você hoje.*"
+                )},
+            ]
+
         if flirt_mode:
             shots += [
                 {"role": "user", "content": "Na porta do meu apê, o vizinho encosta e sobe a mão pela minha coxa, por baixo do vestido."},
@@ -375,7 +424,7 @@ def gerar_resposta(usuario: str, prompt_usuario: str, model: str, character: str
     persona_text, history_boot = get_persona(char)
     usuario_key = usuario if char.lower() == "mary" else f"{usuario}::{char.lower()}"
 
-    # local
+    # local (NÃO sobrescreve se não houver dica clara no prompt)
     loc = infer_from_prompt(prompt_usuario) or ""
     if loc:
         set_fact(usuario_key, "local_cena_atual", loc, {"fonte": "service"})
@@ -385,14 +434,24 @@ def gerar_resposta(usuario: str, prompt_usuario: str, model: str, character: str
     local_atual = get_fact(usuario_key, "local_cena_atual", "") or ""
     memo = _memory_context(usuario_key)
 
+    # flags
     flirt_mode = bool(get_fact(usuario_key, "flirt_mode", False))
     nsfw_on = bool(nsfw_enabled(usuario_key))
+    parceiro = (get_fact(usuario_key, "parceiro_atual", "") or "").strip().lower()
+    romance_on = (char.lower() == "laura" and parceiro in {"janio", "jânio"})
 
-    estilo_msg = {"role": "system", "content": _style_guide_for(char, nsfw_on, flirt_mode)}
-    few = _fewshot_for(char, flirt_mode, nsfw_on)
+    # estilo + few-shots
+    estilo_msg = {"role": "system", "content": _style_guide_for(char, nsfw_on, flirt_mode, romance_on)}
+    few = _fewshot_for(char, flirt_mode, nsfw_on, romance_on)
+
+    # PIN de cenário com regra explícita (tem mais peso que o user)
+    local_pin = {
+        "role": "system",
+        "content": f"LOCAL_PIN: {local_atual or '—'}. Regra dura: NÃO mude o cenário salvo pedido explícito do usuário."
+    }
 
     messages: List[Dict[str, str]] = (
-        [{"role": "system", "content": persona_text}, estilo_msg]
+        [{"role": "system", "content": persona_text}, estilo_msg, local_pin]
         + (few if few else [])
         + hist
         + [{
@@ -429,7 +488,7 @@ def gerar_resposta(usuario: str, prompt_usuario: str, model: str, character: str
         except Exception:
             pass
 
-    # anti-interrupção “mágica” + coerência de cenário + tom claro
+    # anti-interrupção “mágica” + coerência + clareza
     resposta = _pos_processar_seguro(resposta, max_frases_por_par=2, local_atual=local_atual, anti_derail=True)
 
     # fidelidade (soft/hard stop) — só relevante para Laura com terceiros
