@@ -72,7 +72,7 @@ st.set_page_config(page_title="Roleplay | Mary Massariol", layout="centered")
 st.title("Roleplay | Mary Massariol")
 
 # ---------- estado base (interno) ----------
-st.session_state.setdefault("usuario", "welnecker")
+st.session_state.setdefault("usuario", "Janio Donisete")
 st.session_state.setdefault("modelo", "deepseek/deepseek-chat-v3-0324")
 st.session_state.setdefault("personagem", "Mary")
 st.session_state.setdefault("history", [])               # type: List[Tuple[str, str]]
