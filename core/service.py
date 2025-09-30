@@ -583,6 +583,65 @@ def _talvez_plantar_vinculo(usuario_key: str, char: str, prompt: str, resposta: 
 
 # ============================ 13) Geração principal ============================
 def gerar_resposta(usuario: str, prompt_usuario: str, model: str, character: str = "Mary") -> str:
+    # --- helpers locais (anti-eco + escopo de personagem) ---
+    def _get_last_assistant_text(u_key: str) -> str:
+        try:
+            docs = get_history_docs(u_key) or []
+            if docs:
+                return (docs[-1].get("resposta_mary") or "").strip()
+        except Exception:
+            pass
+        return ""
+
+    def _norm(s: str) -> str:
+        s = re.sub(r"\s+", " ", s)
+        s = re.sub(r"[^\wáéíóúâêîôûãõàç]+", " ", s, flags=re.IGNORECASE)
+        return s.strip().lower()
+
+    def _dedupe_against_last(texto: str, u_key: str) -> str:
+        last = _get_last_assistant_text(u_key)
+        if not last:
+            return texto
+        last_sents = {_norm(s) for s in _split_sentences(last)}
+        kept = []
+        for s in _split_sentences(texto):
+            if _norm(s) in last_sents:
+                continue
+            kept.append(s)
+        if not kept:
+            return texto
+        joined = " ".join(kept)
+        # removemos parágrafos duplicados dentro da própria resposta
+        paras = [p.strip() for p in re.split(r"\n{2,}", joined) if p.strip()]
+        seen, deduped = set(), []
+        for p in paras:
+            key = _norm(p)
+            if key in seen: 
+                continue
+            seen.add(key)
+            deduped.append(p)
+        return "\n\n".join(deduped).strip()
+
+    def _enforce_character_scope(texto: str, char: str, prompt: str) -> str:
+        # Se estamos com "Laura" ou "Mary" e o usuário NÃO citou Narith,
+        # removemos menções acidentais de Narith/elfa do texto gerado.
+        if (char or "").strip().lower() in {"laura", "mary"}:
+            if not re.search(r"\b(narith|nerith|elfa)\b", prompt, re.IGNORECASE):
+                sents = _split_sentences(texto)
+                sents = [s for s in sents if not re.search(r"\b(narith|nerith|elfa)\b", s, re.IGNORECASE)]
+                return _force_paragraphs(" ".join(sents), max_frases_por_par=2, alvo_pars=(3, 5))
+        return texto
+
+    def _is_short_followup(p: str) -> bool:
+        p0 = (p or "").strip().lower()
+        if p0.startswith("continuar") or p0.startswith("continuar:") or p0.startswith("continar:") or p0.startswith("cont"):
+            return True
+        if len(p0) <= 80:
+            if re.search(r"^(sim|ok|claro|isso|beleza|perfeito|ótimo|ta|tá|pode|vamos|quero|continua|seguir|manda|ah!?.*café|um café)", p0):
+                return True
+        return False
+
+    # --- início do fluxo original ---
     char = (character or "Mary").strip()
     persona_text, history_boot = get_persona(char)
     usuario_key = usuario if char.lower() == "mary" else f"{usuario}::{char.lower()}"
@@ -603,22 +662,33 @@ def gerar_resposta(usuario: str, prompt_usuario: str, model: str, character: str
     parceiro = (get_fact(usuario_key, "parceiro_atual", "") or "").strip().lower()
     romance_on = (char.lower() == "laura" and parceiro in {"janio", "jânio"})
 
-    # ===== ARC state + pins =====
-    state = _narrative_state(usuario_key)
-
     # estilo + few-shots
     estilo_msg = {"role": "system", "content": _style_guide_for(char, nsfw_on, flirt_mode, romance_on)}
     few = _fewshot_for(char, flirt_mode, nsfw_on, romance_on)
 
-    # PINs de cenário e de arco (regras duras)
+    # PINs (regras duras)
     local_pin = {
         "role": "system",
         "content": f"LOCAL_PIN: {local_atual or '—'}. Regra dura: NÃO mude o cenário salvo pedido explícito do usuário."
     }
-    arc_pin = _narrative_pin_msg(state)
+    antirepeat_pin = {
+        "role": "system",
+        "content": (
+            "ANTI-ECO: não repita frases/trechos da(s) última(s) resposta(s). "
+            "Se recapitular, faça em no máximo 1 frase nova e siga adiante com ação/diálogo inéditos."
+        )
+    }
+    progress_pin = {
+        "role": "system",
+        "content": (
+            "PROGRESSO: se a mensagem do usuário for curta/confirmatória, não recapitule; "
+            "avance a cena com uma nova ação concreta e uma nova fala curta, no cenário atual."
+        )
+    } if _is_short_followup(prompt_usuario) else None
 
     messages: List[Dict[str, str]] = (
-        [{"role": "system", "content": persona_text}, estilo_msg, local_pin, arc_pin]
+        [{"role": "system", "content": persona_text}, estilo_msg, local_pin, antirepeat_pin]
+        + ([progress_pin] if progress_pin else [])
         + (few if few else [])
         + hist
         + [{
@@ -655,11 +725,15 @@ def gerar_resposta(usuario: str, prompt_usuario: str, model: str, character: str
         except Exception:
             pass
 
-    # anti-interrupção “mágica” + coerência + clareza
+    # pós-processo: coerência + tom + parágrafos
     resposta = _pos_processar_seguro(resposta, max_frases_por_par=2, local_atual=local_atual, anti_derail=True)
 
-    # checkpoint narrativo: bloqueia recaída para boate quando arc estiver travado
-    resposta = _enforce_arc(resposta, local_atual, state)
+    # anti-eco contra a última resposta + anti-duplicação interna
+    resposta = _dedupe_against_last(resposta, usuario_key)
+    resposta = _force_paragraphs(resposta, max_frases_por_par=2, alvo_pars=(3, 5))
+
+    # escopo de personagem (evita “Narith” aparecer em Laura sem pedido)
+    resposta = _enforce_character_scope(resposta, char, prompt_usuario)
 
     # fidelidade (soft/hard stop) — só relevante para Laura com terceiros
     if _TRIGGER_THIRD_PARTY.search(f"{prompt_usuario}\n{resposta}"):
@@ -667,9 +741,6 @@ def gerar_resposta(usuario: str, prompt_usuario: str, model: str, character: str
 
     # auto-plantar vínculo Laura→Janio quando houver sinal claro de compromisso
     _talvez_plantar_vinculo(usuario_key, char, prompt_usuario, resposta)
-
-    # atualizar flags de arco (sair da boate / foco no emprego) ao detectar progresso
-    _maybe_update_arc_flags(usuario_key, prompt_usuario, resposta)
 
     # persistir
     save_interaction(usuario_key, prompt_usuario, resposta, f"{provider}:{used_model}")
