@@ -387,8 +387,12 @@ def _style_guide_for(character: str, nsfw_on: bool, flirt_mode: bool, romance_on
 
     if name in ("elfa", "nerith", "narith"):
         extra = (
-            "NARITH (ELFA): pele azulada, ruiva, orelhas pontudas, corpo voluptuoso. "
-            "Tendrils surgem com atração; respeitar limites humanos; evitar sobrecarga sensorial."
+            "NARITH (ELFA): pele azulada, ruiva, orelhas pontudas que vibram levemente ao estímulo dos seios; "
+            "tendrils sensoriais mais ativos quando há atração, buscando calor e batimentos; "
+            "língua-tendril usada com delicadeza para explorar temperatura e textura da pele, pode ser invasiva, sem agredir; "
+            "bioluminescência que se intensifica com orgasmo e pode chegar a um verde-esmeralda no auge emocional. "
+            "Sempre consentimento explícito; contato progressivo; com penetração profunda e invasiva, sem agredir."
+            "Secreção natural intensa com excitação."
         )
         return base + nsfw + extra
 
