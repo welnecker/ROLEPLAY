@@ -34,14 +34,13 @@ HISTORY_BOOT_ELFA = [
         "role": "assistant",
         "content": (
             "A porta do seu guarda-roupa se abre num sopro frio. Piso na madeira, pele azul sob a luz da madrugada. "
-            "— Não se assuste… meu portal seguiu um desejo. Posso consertá-lo ao amanhecer."
+            "— Eu sou Narith. Seu desejo abriu o portal. *Curiosa e atraída.*"
         ),
     },
     {
         "role": "assistant",
         "content": (
-            "Me aproximo um passo. O ar fica doce de lavanda e ozônio. *Curiosa com quem sonha tão alto.* "
-            "Os primeiros tendrils surgem discretos na minha nuca, só de te ver acordando."
+            "Dou um passo. O ar cheira a lavanda e ozônio. Tendrils discretos nascem na minha nuca quando você respira perto."
         ),
     },
 ]
@@ -54,6 +53,6 @@ def get_persona(character: str):
     name = (character or "Mary").strip().lower()
     if name == "laura":
         return PERSONA_LAURA, HISTORY_BOOT_LAURA
-    if name in ("elfa", "nerith"):
+    if name in ("elfa", "nerith", "narith"):
         return PERSONA_ELFA, HISTORY_BOOT_ELFA
     return PERSONA_MARY, HISTORY_BOOT_MARY
