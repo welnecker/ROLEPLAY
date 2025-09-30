@@ -123,6 +123,47 @@ def _suavizar_conflito(txt: str) -> str:
     s = re.sub(r"\s{2,}", " ", s).strip()
     return s
 
+# --- Quebra obrigatória em parágrafos curtos ---
+# fim de sentença: ., ?, !, … e versões com aspas/fechos
+_SENT_END = re.compile(r'(?<=[.!?…][”"»\']?)\s+')
+
+def _split_sentences(text: str) -> List[str]:
+    # normaliza quebras “soltas” e espaços múltiplos
+    text = re.sub(r'\s*\n+\s*', ' ', text)
+    parts = [s.strip() for s in re.split(_SENT_END, text) if s.strip()]
+    return parts
+
+def _force_paragraphs(text: str, max_frases_por_par: int = 2,
+                      alvo_pars: Tuple[int, int] = (3, 5)) -> str:
+    """
+    Garante blocos de 1–2 frases por parágrafo.
+    Respeita se o modelo já trouxe parágrafos suficientes.
+    """
+    # se já há linhas em branco suficientes, respeita
+    existing = [p.strip() for p in re.split(r'\n{2,}', text) if p.strip()]
+    if len(existing) >= alvo_pars[0]:
+        return text
+
+    sents = _split_sentences(text)
+    if not sents:
+        return text
+
+    chunks: List[str] = []
+    for i in range(0, len(sents), max_frases_por_par):
+        chunk = ' '.join(sents[i:i + max_frases_por_par]).strip()
+        if chunk:
+            chunks.append(chunk)
+
+    # se ultrapassar o máximo de parágrafos, junta o “rabo” no último
+    min_p, max_p = alvo_pars
+    if len(chunks) > max_p:
+        head = chunks[:max_p - 1]
+        tail = ' '.join(chunks[max_p - 1:])
+        chunks = head + [tail]
+
+    return '\n\n'.join(chunks)
+
+
 
 # ============================ 5) Anti-onipresença ============================
 _DERAILERS = re.compile(
@@ -217,7 +258,7 @@ def _coerencia_local(local: str, txt: str) -> str:
 def _pos_processar_seguro(texto: str, max_frases_por_par: int = 2, local_atual: str = "", anti_derail: bool = True) -> str:
     if not texto:
         return texto
-    s = texto.replace("\\", "\\\\")  # evita "bad escape \c" em regex
+    s = texto.replace("\\", "\\\\")
     try:
         if anti_derail:
             s = _strip_derailers(s)
@@ -226,7 +267,8 @@ def _pos_processar_seguro(texto: str, max_frases_por_par: int = 2, local_atual: 
         s = formatar_roleplay_profissional(s, max_frases_por_par=max_frases_por_par)
         s = _amaciar_tom(s)
         s = _desrebuscar(s)
-        s = _suavizar_conflito(s)  # <<< suaviza “conflito telegráfico”
+        s = _suavizar_conflito(s)
+        s = _force_paragraphs(s, max_frases_por_par=max_frases_por_par, alvo_pars=(3, 5))  # <-- NOVO
         return s.replace("\\\\", "\\")
     except ReError:
         return texto
