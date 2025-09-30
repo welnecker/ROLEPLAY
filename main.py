@@ -139,24 +139,29 @@ st.sidebar.caption(f"Provedor: **{provider}**")
 st.sidebar.markdown("---")
 st.session_state["ui_auto_loc"] = st.sidebar.checkbox(
     "📍 Inferir local automaticamente",
-    value=st.session_state["ui_auto_loc"]
+    value=st.session_state["ui_auto_loc"],
+    help="Quando ligado, tenta detectar o lugar a partir da sua mensagem e fixa em memória."
 )
 # sync
 st.session_state["auto_loc"] = st.session_state["ui_auto_loc"]
 
 # ---------- sidebar: FLERTE (permitir quase-traição) ----------
-flirt_fact_val = bool(get_fact(usuario_key, "flirt_mode", False))
-st.session_state.setdefault("ui_flirt_mode", flirt_fact_val)
-st.session_state["ui_flirt_mode"] = st.sidebar.checkbox(
-    "💃 Flerte (permitir quase-traição)",
-    value=st.session_state["ui_flirt_mode"],
-    help="Ligado: permite flerte com terceiro até quase acontecer; antes do sexo ela interrompe. Desligado: barra cedo."
-)
-if st.session_state["ui_flirt_mode"] != flirt_fact_val:
-    try:
-        set_fact(usuario_key, "flirt_mode", bool(st.session_state["ui_flirt_mode"]), {"fonte": "sidebar"})
-    except Exception as e:
-        st.sidebar.warning(f"Falha ao salvar preferência de flerte: {e}")
+if personagem == "Laura":
+    flirt_fact_val = bool(get_fact(usuario_key, "flirt_mode", False))
+    st.session_state.setdefault("ui_flirt_mode", flirt_fact_val)
+    st.session_state["ui_flirt_mode"] = st.sidebar.checkbox(
+        "💃 Flerte (permitir quase-traição)",
+        value=st.session_state["ui_flirt_mode"],
+        help="Ligado: permite flerte com terceiro até quase acontecer; antes do sexo ela interrompe. Desligado: barra cedo."
+    )
+    if st.session_state["ui_flirt_mode"] != flirt_fact_val:
+        try:
+            set_fact(usuario_key, "flirt_mode", bool(st.session_state["ui_flirt_mode"]), {"fonte": "sidebar"})
+        except Exception as e:
+            st.sidebar.warning(f"Falha ao salvar preferência de flerte: {e}")
+else:
+    # Esconde/neutraliza para Mary/Narith (sem alterar fato salvo da Laura em outra key)
+    st.sidebar.caption("💃 Flerte: disponível apenas para **Laura**.")
 
 # ---------- sidebar: MEMÓRIA CANÔNICA (ver/adicionar) ----------
 st.sidebar.markdown("---")
@@ -187,15 +192,15 @@ if evs:
 else:
     st.sidebar.caption("_Nenhum evento recente._")
 
-# forms para salvar fato/evento
+# forms para salvar fato/evento (com keys únicos)
 with st.sidebar.form("form_fato", clear_on_submit=True):
     st.markdown("**Adicionar Fato**")
-    f_chave = st.text_input("Chave", placeholder="ex.: parceiro_atual")
-    f_valor = st.text_input("Valor", placeholder="ex.: Janio")
+    f_chave = st.text_input("Chave", placeholder="ex.: parceiro_atual", key="fato_chave")
+    f_valor = st.text_input("Valor", placeholder="ex.: Janio", key="fato_valor")
     salvar_fato = st.form_submit_button("💾 Salvar fato")
-    if salvar_fato and f_chave.strip():
+    if salvar_fato and (f_chave or "").strip():
         try:
-            set_fact(usuario_key, f_chave.strip(), f_valor.strip(), {"fonte": "manual"})
+            set_fact(usuario_key, f_chave.strip(), (f_valor or "").strip(), {"fonte": "manual"})
             st.success("Fato salvo.")
             _rerun()
         except Exception as e:
@@ -203,13 +208,13 @@ with st.sidebar.form("form_fato", clear_on_submit=True):
 
 with st.sidebar.form("form_evento", clear_on_submit=True):
     st.markdown("**Adicionar Evento**")
-    e_tipo  = st.text_input("Tipo", placeholder="ex.: primeiro_encontro")
-    e_desc  = st.text_area("Descrição", placeholder="texto curto factual", height=60)
-    e_local = st.text_input("Local (opcional)", placeholder="ex.: Padaria do Zé")
+    e_tipo  = st.text_input("Tipo", placeholder="ex.: primeiro_encontro", key="evento_tipo")
+    e_desc  = st.text_area("Descrição", placeholder="texto curto factual", height=60, key="evento_desc")
+    e_local = st.text_input("Local (opcional)", placeholder="ex.: Padaria do Zé", key="evento_local")
     salvar_evento = st.form_submit_button("💾 Salvar evento")
-    if salvar_evento and e_tipo.strip() and e_desc.strip():
+    if salvar_evento and (e_tipo or "").strip() and (e_desc or "").strip():
         try:
-            register_event(usuario_key, e_tipo.strip(), e_desc.strip(), (e_local.strip() or None), {"fonte": "manual"})
+            register_event(usuario_key, e_tipo.strip(), e_desc.strip(), ((e_local or "").strip() or None), {"fonte": "manual"})
             st.success("Evento salvo.")
             _rerun()
         except Exception as e:
@@ -297,7 +302,7 @@ if continuar_clicked and not user_prompt:
     # Prompt especial para continuação lógica (sem mudar local)
     prompt = (
         "CONTINUAR: Prossiga a cena exatamente de onde a última resposta parou. "
-        "Mantenha LOCAL_ATUAL, personagens presentes e tom. Não resuma; apenas avance a ação e o diálogo em 1ª pessoa."
+        "Mantenha LOCAL_ATUAL, personagens presentes e tom. Não resuma; avance a ação e o diálogo em 1ª pessoa."
     )
     is_auto_continue = True
 elif user_prompt:
@@ -310,7 +315,7 @@ if prompt:
         st.markdown("🔁 **Continuar**" if is_auto_continue else prompt)
     st.session_state["history"].append(("user", "🔁 Continuar" if is_auto_continue else prompt))
 
-    # Inferir/fixar local APENAS quando veio texto do usuário
+    # Inferir/fixar local APENAS quando veio texto do usuário (não no Continuar)
     if (not is_auto_continue) and st.session_state["auto_loc"]:
         try:
             loc = infer_location(prompt)
