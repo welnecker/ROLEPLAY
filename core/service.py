@@ -16,6 +16,84 @@ from .service_router import route_chat_strict
 from .nsfw import nsfw_enabled
 
 
+# ===== ARC / Checkpoint narrativo =====
+_ARC_BACK_TO_BOATE = re.compile(r'\b(boate|palco|camarim|priv[êe]|dj|pole|vip)\b', re.IGNORECASE)
+_ARC_LEAVING_BOATE = re.compile(
+    r'\b(entrevista|shopping|loja|emprego( novo| decente)?|contrata[çc][aã]o|'
+    r'curr[íi]culo|vitrine|provador|vendedor(a)?|balc[aã]o|gerente)\b', re.IGNORECASE
+)
+
+def _narrative_state(usuario_key: str) -> Dict[str, object]:
+    """Lê flags canônicas do arco. Tudo opcional; defaults seguros."""
+    try:
+        f = get_facts(usuario_key) or {}
+    except Exception:
+        f = {}
+    return {
+        "parceiro": (f.get("parceiro_atual") or "").strip().lower(),
+        "boate_locked": bool(f.get("arc_boate_locked", False)),          # decidido sair da boate
+        "goal": (f.get("arc_goal") or "").strip().lower(),               # ex.: 'emprego_loja'
+        "local_pin": (f.get("local_cena_atual") or "").strip().lower(),
+    }
+
+def _narrative_pin_msg(state: Dict[str, object]) -> Dict[str, str]:
+    """Mensagem de sistema que o modelo não deve contrariar."""
+    parceiro = state.get("parceiro") or "—"
+    boate_locked = bool(state.get("boate_locked"))
+    goal = state.get("goal") or "—"
+    local_pin = state.get("local_pin") or "—"
+    regras = [
+        f"ARC_PIN: parceiro={parceiro}; goal={goal}; boate_locked={boate_locked}; LOCAL_FIXO={local_pin or '—'}.",
+        "Regra dura: NÃO contradiga flags do arco. Se o usuário pedir retorno à boate com boate_locked=True, "
+        "reafirme a decisão e redirecione a cena para o objetivo atual (ex.: entrevista/loja/casa).",
+        "Use respostas leves (gesto + sensação), sem sermão, mantendo 1–2 frases por parágrafo."
+    ]
+    return {"role": "system", "content": " ".join(regras)}
+
+def _enforce_arc(texto: str, local_atual: str, state: Dict[str, object]) -> str:
+    """
+    Pós-processo: se 'boate_locked' e o texto ainda vazou tokens de boate,
+    reescreve/limpa sentenças e injeta uma ponte coerente com o local atual.
+    """
+    if not texto:
+        return texto
+    try:
+        if bool(state.get("boate_locked", False)) and _ARC_BACK_TO_BOATE.search(texto):
+            # 1) filtra sentenças com tokens proibidos
+            sent = re.split(r"(?<=[.!?…][”\"»']?)\s+", texto)
+            keep = [s for s in sent if not _ARC_BACK_TO_BOATE.search(s)]
+            texto = " ".join(keep).strip() or texto
+
+            # 2) injeta ponte de redirecionamento, suave e curta
+            ponte = {
+                "loja":  "Eu aperto meu currículo contra o peito e respiro fundo. Volto ao balcão e sigo com a entrevista.",
+                "casa":  "Eu fecho a gaveta e seguro a xícara morna. Hoje eu fico aqui, focada no que importa.",
+                "praia": "Eu ajeito a alça da bolsa e caminho pela orla. Um passo de cada vez, sem voltar atrás.",
+                "boate": "Eu encaro meu reflexo e nego com a cabeça. Não volto. Viro as costas e sigo em frente.",
+            }
+            alvo = "loja" if "loja" in (local_atual or "").lower() else \
+                   "casa" if "casa" in (local_atual or "").lower() or "apart" in (local_atual or "").lower() else \
+                   "praia" if "praia" in (local_atual or "").lower() or "orla" in (local_atual or "").lower() else \
+                   "boate"
+            texto = (texto.rstrip() + " " + ponte[alvo]).strip()
+        return texto
+    except ReError:
+        return texto
+
+def _maybe_update_arc_flags(usuario_key: str, prompt: str, resposta: str) -> None:
+    """
+    Sobe flags do arco quando há sinal claro de 'sair da boate' ou 'seguir emprego/loja'.
+    Não quebra a geração se falhar.
+    """
+    try:
+        combo = f"{prompt}\n{resposta}"
+        if _ARC_LEAVING_BOATE.search(combo):
+            set_fact(usuario_key, "arc_boate_locked", True, {"fonte": "auto/arc"})
+            set_fact(usuario_key, "arc_goal", "emprego_loja", {"fonte": "auto/arc"})
+    except Exception:
+        pass
+
+
 # ============================ 1) Pessoa/voz ============================
 def _make_third_person_flag(name: str) -> re.Pattern:
     safe = re.escape((name or "").strip())
@@ -525,18 +603,22 @@ def gerar_resposta(usuario: str, prompt_usuario: str, model: str, character: str
     parceiro = (get_fact(usuario_key, "parceiro_atual", "") or "").strip().lower()
     romance_on = (char.lower() == "laura" and parceiro in {"janio", "jânio"})
 
+    # ===== ARC state + pins =====
+    state = _narrative_state(usuario_key)
+
     # estilo + few-shots
     estilo_msg = {"role": "system", "content": _style_guide_for(char, nsfw_on, flirt_mode, romance_on)}
     few = _fewshot_for(char, flirt_mode, nsfw_on, romance_on)
 
-    # PIN de cenário com regra explícita
+    # PINs de cenário e de arco (regras duras)
     local_pin = {
         "role": "system",
         "content": f"LOCAL_PIN: {local_atual or '—'}. Regra dura: NÃO mude o cenário salvo pedido explícito do usuário."
     }
+    arc_pin = _narrative_pin_msg(state)
 
     messages: List[Dict[str, str]] = (
-        [{"role": "system", "content": persona_text}, estilo_msg, local_pin]
+        [{"role": "system", "content": persona_text}, estilo_msg, local_pin, arc_pin]
         + (few if few else [])
         + hist
         + [{
@@ -576,6 +658,9 @@ def gerar_resposta(usuario: str, prompt_usuario: str, model: str, character: str
     # anti-interrupção “mágica” + coerência + clareza
     resposta = _pos_processar_seguro(resposta, max_frases_por_par=2, local_atual=local_atual, anti_derail=True)
 
+    # checkpoint narrativo: bloqueia recaída para boate quando arc estiver travado
+    resposta = _enforce_arc(resposta, local_atual, state)
+
     # fidelidade (soft/hard stop) — só relevante para Laura com terceiros
     if _TRIGGER_THIRD_PARTY.search(f"{prompt_usuario}\n{resposta}"):
         resposta = _maybe_stop_by_fidelity(prompt_usuario, resposta, usuario_key, char, local_atual, flirt_mode)
@@ -583,6 +668,10 @@ def gerar_resposta(usuario: str, prompt_usuario: str, model: str, character: str
     # auto-plantar vínculo Laura→Janio quando houver sinal claro de compromisso
     _talvez_plantar_vinculo(usuario_key, char, prompt_usuario, resposta)
 
+    # atualizar flags de arco (sair da boate / foco no emprego) ao detectar progresso
+    _maybe_update_arc_flags(usuario_key, prompt_usuario, resposta)
+
     # persistir
     save_interaction(usuario_key, prompt_usuario, resposta, f"{provider}:{used_model}")
     return resposta
+
