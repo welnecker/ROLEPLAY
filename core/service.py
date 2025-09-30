@@ -123,14 +123,17 @@ def _suavizar_conflito(txt: str) -> str:
     s = re.sub(r"\s{2,}", " ", s).strip()
     return s
 
-# --- Quebra obrigatória em parágrafos curtos ---
-# fim de sentença: ., ?, !, … e versões com aspas/fechos
-_SENT_END = re.compile(r'(?<=[.!?…][”"»\']?)\s+')
+# --- Quebra obrigatória em parágrafos curtos (sem lookbehind) ---
+# Captura final de sentença: (. ? ! …) + aspas/fecho opcionais logo após.
+_SENT_END = re.compile(r'([.!?…]["”»\']?)\s+')
 
 def _split_sentences(text: str) -> List[str]:
-    # normaliza quebras “soltas” e espaços múltiplos
+    # normaliza quebras soltas e espaços múltiplos
     text = re.sub(r'\s*\n+\s*', ' ', text)
-    parts = [s.strip() for s in re.split(_SENT_END, text) if s.strip()]
+    # insere marcador após cada final de sentença
+    marked = _SENT_END.sub(r'\1¶', text)
+    # quebra pelo marcador
+    parts = [s.strip() for s in marked.split('¶') if s.strip()]
     return parts
 
 def _force_paragraphs(text: str, max_frases_por_par: int = 2,
@@ -139,7 +142,6 @@ def _force_paragraphs(text: str, max_frases_por_par: int = 2,
     Garante blocos de 1–2 frases por parágrafo.
     Respeita se o modelo já trouxe parágrafos suficientes.
     """
-    # se já há linhas em branco suficientes, respeita
     existing = [p.strip() for p in re.split(r'\n{2,}', text) if p.strip()]
     if len(existing) >= alvo_pars[0]:
         return text
@@ -154,7 +156,6 @@ def _force_paragraphs(text: str, max_frases_por_par: int = 2,
         if chunk:
             chunks.append(chunk)
 
-    # se ultrapassar o máximo de parágrafos, junta o “rabo” no último
     min_p, max_p = alvo_pars
     if len(chunks) > max_p:
         head = chunks[:max_p - 1]
