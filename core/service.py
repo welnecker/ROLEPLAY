@@ -106,6 +106,23 @@ def _desrebuscar(txt: str) -> str:
         out = pat.sub(repl, out)
     return out
 
+# Anti “conflito telegráfico”: remove cronômetro/sermão e burocratês
+_CONFLITO_PATTERNS = [
+    (re.compile(r"\b[Ff]altam\s+\d{1,3}\s+minutos?\b"), ""),
+    (re.compile(r"\b\d{1,2}:\d{2}\b"), "mais tarde"),
+    (re.compile(r"\b[Ss]ó mais uma noite\b"), "só essa noite"),
+    (re.compile(r"^\s*Trabalho\.\s*", re.IGNORECASE), ""),
+    (re.compile(r"\b[Pp]or conseguinte\b"), "por isso"),
+    (re.compile(r"\b[Dd]essa forma\b"), "assim"),
+]
+
+def _suavizar_conflito(txt: str) -> str:
+    s = txt
+    for pat, repl in _CONFLITO_PATTERNS:
+        s = pat.sub(repl, s)
+    s = re.sub(r"\s{2,}", " ", s).strip()
+    return s
+
 
 # ============================ 5) Anti-onipresença ============================
 _DERAILERS = re.compile(
@@ -130,7 +147,6 @@ _CTX_TOKENS = {
     "praia": {r"\bpraia\b", r"\bareia\b", r"\bquiosque\b", r"\bbrisa\b", r"\bmar\b"},
 }
 
-# mapeia termos de contextos “errados” para equivalentes do alvo (evita sumir parágrafos)
 _CTX_REWRITE: Dict[str, List[Tuple[re.Pattern, str]]] = {
     "loja": [
         (re.compile(r"\bboate\b", re.IGNORECASE), "padaria"),
@@ -178,10 +194,10 @@ def _coerencia_local(local: str, txt: str) -> str:
     if not alvo:
         return txt
 
-    # 1) tentar reescrever termos errados para o alvo
+    # 1) reescreve termos para o alvo
     txt = _rewrite_to_local(alvo, txt)
 
-    # 2) ainda assim, filtrar sentenças que insistirem em outro cenário
+    # 2) filtra sentenças insistentes em outro cenário
     ban_tokens = set()
     for k, pats in _CTX_TOKENS.items():
         if k != alvo:
@@ -210,6 +226,7 @@ def _pos_processar_seguro(texto: str, max_frases_por_par: int = 2, local_atual: 
         s = formatar_roleplay_profissional(s, max_frases_por_par=max_frases_por_par)
         s = _amaciar_tom(s)
         s = _desrebuscar(s)
+        s = _suavizar_conflito(s)  # <<< suaviza “conflito telegráfico”
         return s.replace("\\\\", "\\")
     except ReError:
         return texto
@@ -236,11 +253,13 @@ def _style_guide_for(character: str, nsfw_on: bool, flirt_mode: bool, romance_on
         extra = (
             "LAURA: calorosa e grata; trabalha por necessidade; não ostenta a boate. "
             "Flerte gentil; convites em vez de ordens. "
-            f"{'Pode haver quase com terceiros, mas recua por fidelidade.' if flirt_mode else 'Sem flerte com terceiros.'}"
+            f"{'Pode haver quase com terceiros, mas recua por fidelidade.' if flirt_mode else 'Sem flerte com terceiros.'} "
+            "CONFLITO MORAL: mostre gesto + sensação em 1–2 frases; sem cronômetro/sermão; "
+            "evite comparar fatos crus; prefira um pensamento íntimo e ação simples."
         )
         if romance_on:
             extra += (
-                " Quando falar com Janio: trate como parceiro; valide sentimentos; evite sermões; "
+                " Quando falar com Janio: trate como parceiro; valide sentimentos; "
                 "use toques leves, sorrisos e apelidos; mostre vulnerabilidade e cuidado explícito."
             )
         return base + nsfw + extra
@@ -261,7 +280,6 @@ def _fewshot_for(character: str, flirt_mode: bool, nsfw_on: bool, romance_on: bo
     shots: List[Dict[str, str]] = []
 
     if name == "laura":
-        # Viés de afeto por Janio (começo tranquilo, sem sermão)
         if romance_on:
             shots += [
                 {"role": "user", "content": "Amanheceu. Estamos na padaria, tomando café."},
@@ -418,6 +436,30 @@ def _maybe_stop_by_fidelity(
     return resposta
 
 
+# ============================ 12.5) Auto-plantar vínculo Laura→Janio ============================
+_PLANTAR_JANIO = re.compile(
+    r"\b(eu te amo|te amo|namorar|ficar comigo|quero você|quero ficar com você|"
+    r"te quero|me beija|beija|beijar|me abraça|ficar junto)\b",
+    re.IGNORECASE
+)
+_JANIO_NAME = re.compile(r"\bj[âa]nio\b", re.IGNORECASE)
+
+def _talvez_plantar_vinculo(usuario_key: str, char: str, prompt: str, resposta: str) -> None:
+    try:
+        if (char or "").strip().lower() != "laura":
+            return
+        parceiro_atual = (get_fact(usuario_key, "parceiro_atual", "") or "").strip()
+        if parceiro_atual:
+            return
+        texto = f"{prompt}\n{resposta}"
+        if _JANIO_NAME.search(texto) and _PLANTAR_JANIO.search(texto):
+            set_fact(usuario_key, "parceiro_atual", "Janio", {"fonte": "auto"})
+            register_event(usuario_key, "vinculo_assumido", "Laura demonstrou compromisso com Janio.", None, {"origin": "auto"})
+    except Exception:
+        # não quebra a geração por erro de persistência
+        pass
+
+
 # ============================ 13) Geração principal ============================
 def gerar_resposta(usuario: str, prompt_usuario: str, model: str, character: str = "Mary") -> str:
     char = (character or "Mary").strip()
@@ -444,7 +486,7 @@ def gerar_resposta(usuario: str, prompt_usuario: str, model: str, character: str
     estilo_msg = {"role": "system", "content": _style_guide_for(char, nsfw_on, flirt_mode, romance_on)}
     few = _fewshot_for(char, flirt_mode, nsfw_on, romance_on)
 
-    # PIN de cenário com regra explícita (tem mais peso que o user)
+    # PIN de cenário com regra explícita
     local_pin = {
         "role": "system",
         "content": f"LOCAL_PIN: {local_atual or '—'}. Regra dura: NÃO mude o cenário salvo pedido explícito do usuário."
@@ -494,6 +536,9 @@ def gerar_resposta(usuario: str, prompt_usuario: str, model: str, character: str
     # fidelidade (soft/hard stop) — só relevante para Laura com terceiros
     if _TRIGGER_THIRD_PARTY.search(f"{prompt_usuario}\n{resposta}"):
         resposta = _maybe_stop_by_fidelity(prompt_usuario, resposta, usuario_key, char, local_atual, flirt_mode)
+
+    # auto-plantar vínculo Laura→Janio quando houver sinal claro de compromisso
+    _talvez_plantar_vinculo(usuario_key, char, prompt_usuario, resposta)
 
     # persistir
     save_interaction(usuario_key, prompt_usuario, resposta, f"{provider}:{used_model}")
