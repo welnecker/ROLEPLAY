@@ -20,8 +20,8 @@ def _check_scrypt(pwd: str) -> bool:
     except Exception:
         return False
 
-def require_password(app_name: str = "Roleplay | Mary Massariol"):
-    # anti-brute-force simples
+def require_password(app_name: str = "App protegido"):
+    # anti-bruteforce simples
     st.session_state.setdefault("_auth_ok", False)
     st.session_state.setdefault("_auth_attempts", 0)
     st.session_state.setdefault("_auth_block_until", 0.0)
@@ -38,8 +38,9 @@ def require_password(app_name: str = "Roleplay | Mary Massariol"):
                 for k in ["_auth_ok", "_auth_attempts", "_auth_block_until"]:
                     st.session_state.pop(k, None)
                 st.rerun()
-        return
+        return  # autenticado → deixa o app continuar
 
+    # Tela de login
     st.title(f"🔒 {app_name}")
     pwd = st.text_input("Senha", type="password")
     if st.button("Entrar"):
@@ -50,11 +51,14 @@ def require_password(app_name: str = "Roleplay | Mary Massariol"):
             st.rerun()
         else:
             st.session_state["_auth_attempts"] += 1
-            backoff = 5 * (3 ** max(0, st.session_state["_auth_attempts"] - 1))  # 5s, 15s, 45s…
+            backoff = 5 * (3 ** max(0, st.session_state["_auth_attempts"] - 1))  # 5s,15s,45s…
             st.session_state["_auth_block_until"] = time.time() + backoff
             st.error("Senha incorreta.")
             st.stop()
-# ===================================================
+
+    # ponto-chave: se não autenticou, parar TUDO
+    st.stop()
+# ==== FIM DO GATE ====# ===================================================
 
 # --- imports principais do app ---
 try:
