@@ -165,7 +165,7 @@ MODEL_OPTIONS = [
     # Together
     "together/meta-llama/Meta-Llama-3.1-405B-Instruct-Turbo",
     "together/Qwen/Qwen2.5-72B-Instruct",
-    "together/google/gemma-2-27b-it",
+    "together/deepseek-ai/DeepSeek-R1-Distill-Qwen-14B",
 ]
 st.selectbox("🧠 Modelo", MODEL_OPTIONS, key="ui_modelo")
 
