@@ -531,29 +531,49 @@ def _fidelity_soft_append(_character: str) -> str:
 def _maybe_stop_by_fidelity(
     prompt: str, resposta: str, usuario_key: str, char: str, local_atual: str, flirt_mode: bool
 ) -> str:
+    """
+    Aplica o guardrail de fidelidade SOMENTE para a personagem Laura.
+    Para qualquer outra personagem, retorna a resposta sem alterações.
+    """
+    # ✅ Gate por personagem
+    if (char or "").strip().lower() != "laura":
+        return resposta
+
     texto = f"{prompt}\n{resposta}"
+
+    # Se o vínculo é com Janio, nunca interrompe
     if re.search(r"\bjanio\b", texto, re.IGNORECASE):
         return resposta
 
+    # Detecta flerte com terceiros até quase-ato ou ato explícito
     if _TRIGGER_THIRD_PARTY.search(texto) and _NEAR_SEX_HARDSTOP.search(texto):
         if _ACTUAL_SEX.search(texto):
             line = _fidelity_hard_line(char)
             try:
-                register_event(usuario_key, "fidelidade_stop", "Recusou traição já em ato explícito.", local_atual or None, {"origin": "auto"})
+                register_event(
+                    usuario_key, "fidelidade_stop",
+                    "Recusou traição já em ato explícito.", local_atual or None, {"origin": "auto"}
+                )
             except Exception:
                 pass
             return line
 
         if flirt_mode:
             try:
-                register_event(usuario_key, "fidelidade_soft", "Permitiu flerte até quase; recuou antes do sexo.", local_atual or None, {"origin": "auto"})
+                register_event(
+                    usuario_key, "fidelidade_soft",
+                    "Permitiu flerte até quase; recuou antes do sexo.", local_atual or None, {"origin": "auto"}
+                )
             except Exception:
                 pass
             return (resposta.rstrip() + _fidelity_soft_append(char))
 
         line = _fidelity_hard_line(char)
         try:
-            register_event(usuario_key, "fidelidade_stop", "Barrou flerte cedo (sem quase).", local_atual or None, {"origin": "auto"})
+            register_event(
+                usuario_key, "fidelidade_stop",
+                "Barrou flerte cedo (sem quase).", local_atual or None, {"origin": "auto"}
+            )
         except Exception:
             pass
         return line
@@ -739,9 +759,9 @@ def gerar_resposta(usuario: str, prompt_usuario: str, model: str, character: str
     # escopo de personagem (evita “Narith” aparecer em Laura sem pedido)
     resposta = _enforce_character_scope(resposta, char, prompt_usuario)
 
-    # fidelidade (soft/hard stop) — só relevante para Laura com terceiros
-    if _TRIGGER_THIRD_PARTY.search(f"{prompt_usuario}\n{resposta}"):
-        resposta = _maybe_stop_by_fidelity(prompt_usuario, resposta, usuario_key, char, local_atual, flirt_mode)
+    # fidelidade (Laura-only; a função já faz o gate por personagem)
+    resposta = _maybe_stop_by_fidelity(prompt_usuario, resposta, usuario_key, char, local_atual, flirt_mode)
+
 
     # auto-plantar vínculo Laura→Janio quando houver sinal claro de compromisso
     _talvez_plantar_vinculo(usuario_key, char, prompt_usuario, resposta)
