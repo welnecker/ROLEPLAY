@@ -213,26 +213,63 @@ def _deslistar(txt: str) -> str:
     s = re.sub(r'\n(?=\S)', ' ', s)
     return s
 
-# --- Narith: cortar "lore" gratuito quando o usuário não pede ---
+# --- Narith: cortar “lore”/pressa/imperativos; focar em convite e pausa ---
 _NARITH_BAN = re.compile(
-    r'\b(espelho|eclipse|asas\s+membranosas?|olhos?\s+negros?|'
-    r'portal\s+(ruge|derrete|abr(e|indo))|enxofre)\b',
+    r'\b(espelho|eclipse|asas\s+membran|olhos?\s+negros?|'
+    r'portal\s+(ruge|derrete|abr(e|indo)|fech(a|ando))|enxofre|protocolo|suplemento|m[eé]dico)\b',
+    re.IGNORECASE
+)
+_NARITH_TIME = re.compile(
+    r'\b\d{1,2}h\d{2}\b|\b\d{1,2}:\d{2}\b|\b\d+\s*(min(utos?)?|seg(undos?)?)\b|tique-?taque',
+    re.IGNORECASE
+)
+_NARITH_COERCE = re.compile(
+    r'\b(ordeno|obedeça|imediatamente|agora|sem\s+discuss[aã]o|fa[çc]a|comece|toque|ajoelhe|'
+    r'cala-?te|sil[eê]ncio|obedece|minhas\s+ordens|vou\s+te\s+ensinar\s+a\s+sobreviver)\b',
+    re.IGNORECASE
+)
+_NARITH_HARSH = re.compile(
+    r'\b(esmag(ar|o)|for[çc]ar|ferida(s)?\s+dimensional|cicatriz(es)?\s+brilhan)\b',
     re.IGNORECASE
 )
 
 def _refinar_narith(txt: str, user_prompt: str, nsfw_on: bool) -> str:
     s = _deslistar(txt)
-    # reduzir retórica tipo "Humanos são..."
+
+    # reduzir retórica tipo “Humanos são…”
     s = re.sub(r'\b(Humanos?|mortais)\s+são\s+[^.?!]+[.?!]\s*', '', s, flags=re.IGNORECASE)
-    # evitar contar tendrils ("3 tendrils"...)
+
+    # evitar contagem/lista de tendrils (“3 tendrils”)
     s = re.sub(r'\b\d+\s+tendrils?\b', 'tendrils', s, flags=re.IGNORECASE)
-    # cortar "lore" se o user não pediu
-    if not _NARITH_BAN.search(user_prompt or ''):
-        sent = re.split(r'(?<=[.!?…])\s+', s)
-        s = ' '.join(t for t in sent if not _NARITH_BAN.search(t)) or s
-    # língua-tendril só com NSFW ON: se OFF, remove menção explícita
+
+    # remover tempos/contagens/apressas
+    s = _NARITH_TIME.sub('', s)
+
+    # filtrar frases com coerção/imperativo duro e termos ásperos/médicos/lore se não solicitados
+    sents = _split_sentences(s)
+    kept = []
+    for sent in sents:
+        if _NARITH_COERCE.search(sent):
+            continue
+        if _NARITH_HARSH.search(sent):
+            continue
+        if _NARITH_BAN.search(sent) and not _NARITH_BAN.search(user_prompt or ''):
+            continue
+        kept.append(sent)
+    if kept:
+        s = ' '.join(kept)
+
+    # língua-tendril só com NSFW ON (menção explícita vira toque suave se OFF)
     if not nsfw_on:
-        s = re.sub(r'língua[-\s]?tendril[^.?!]*[.?!]', '', s, flags=re.IGNORECASE)
+        s = re.sub(r'l[ií]ngua[-\s]?tendril[^.?!]*[.?!]', 'Encosto os lábios com cuidado, pedindo licença.', s, flags=re.IGNORECASE)
+
+    # suavizar referências a dor/força excessiva
+    s = re.sub(r'\bdor\s+gostos[ae]\b', 'pressão boa', s, flags=re.IGNORECASE)
+
+    # adicionar uma âncora de calma se ainda houver rastro de “portal”/pressa
+    if re.search(r'\bportal\b', s, re.IGNORECASE) and 'sem pressa' not in s.lower():
+        s = s.strip() + " O portal está estável; sem pressa."
+
     return s.strip()
 
 # --- Refinamento comum (Laura/Mary): sensual direto, sem sermão/listas ---
@@ -242,7 +279,7 @@ def _refinar_common_sensual(character: str, txt: str) -> str:
     s = re.sub(r'^\s*(olha,|escuta,|veja,)\s*', '', s, flags=re.IGNORECASE)
     # suavizar “explicar sentimentos” em bloco
     s = re.sub(r'\b(eu\s+(sei|acho|penso)\s+que\s+)[^.?!]+[.?!]\s*', '', s, flags=re.IGNORECASE)
-    # deixar as falas soarem mais diretas
+    # remover promessas de sermão
     s = re.sub(r'\b(n[aã]o\s+v[ao]u\s+te\s+dar\s+um\s+serm[aã]o)[.?!]\s*', '', s, flags=re.IGNORECASE)
     return s.strip()
 
@@ -444,9 +481,8 @@ def _style_guide_for(character: str, nsfw_on: bool, flirt_mode: bool, romance_on
     if name in {"elfa", "nerith", "narith"}:
         extra = (
             "NARITH (ELFA): pele azulada; ruiva; orelhas pontudas vibram a estímulo nos seios. "
-            "Tendrils buscam calor e batimentos; toques progressivos e consentidos. "
-            "Língua-tendril só em excitação alta e se NSFW ON; explorar bordas e pele com delicadeza. "
-            "Evite listas e ‘lore’ gratuito; descreva uma sensação por vez com clareza e pausa."
+            "Tendrils buscam calor e batimentos; toques progressivos, pedindo permissão a cada avanço. "
+            "Evite listas e ‘lore’ gratuito; descreva uma sensação por vez, com pausas e sem pressa."
         )
         return base + nsfw + extra
 
