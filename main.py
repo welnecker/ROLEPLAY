@@ -1,87 +1,72 @@
 # main.py
 from typing import Optional, List, Tuple
+import time, hmac, hashlib        # << aqui, junto dos imports
 import streamlit as st
 
-# --- imports principais ---
+# ============ BLOQUEIO POR SENHA (GATE) ============
+def _check_scrypt(pwd: str) -> bool:
+    cfg = st.secrets.get("auth", {})
+    salt_hex = cfg.get("salt", "")
+    hash_hex = cfg.get("password_scrypt", "")
+    if not salt_hex or not hash_hex:
+        return False
+    try:
+        calc = hashlib.scrypt(
+            pwd.encode("utf-8"),
+            salt=bytes.fromhex(salt_hex),
+            n=2**14, r=8, p=1
+        ).hex()
+        return hmac.compare_digest(calc, hash_hex)
+    except Exception:
+        return False
+
+def require_password(app_name: str = "Roleplay | Mary Massariol"):
+    # anti-brute-force simples
+    st.session_state.setdefault("_auth_ok", False)
+    st.session_state.setdefault("_auth_attempts", 0)
+    st.session_state.setdefault("_auth_block_until", 0.0)
+
+    now = time.time()
+    if now < st.session_state["_auth_block_until"]:
+        wait = int(st.session_state["_auth_block_until"] - now)
+        st.error(f"Tentativas excessivas. Tente novamente em {wait}s.")
+        st.stop()
+
+    if st.session_state["_auth_ok"]:
+        with st.sidebar:
+            if st.button("Sair"):
+                for k in ["_auth_ok", "_auth_attempts", "_auth_block_until"]:
+                    st.session_state.pop(k, None)
+                st.rerun()
+        return
+
+    st.title(f"🔒 {app_name}")
+    pwd = st.text_input("Senha", type="password")
+    if st.button("Entrar"):
+        if _check_scrypt(pwd):
+            st.session_state["_auth_ok"] = True
+            st.session_state["_auth_attempts"] = 0
+            st.success("Acesso liberado.")
+            st.rerun()
+        else:
+            st.session_state["_auth_attempts"] += 1
+            backoff = 5 * (3 ** max(0, st.session_state["_auth_attempts"] - 1))  # 5s, 15s, 45s…
+            st.session_state["_auth_block_until"] = time.time() + backoff
+            st.error("Senha incorreta.")
+            st.stop()
+# ===================================================
+
+# --- imports principais do app ---
 try:
     from core.service import gerar_resposta
 except Exception as e:
     st.error(f"Falha ao importar core.service: {e}")
     raise
 
- from typing import Optional, List, Tuple
- import streamlit as st
-
-+# ============ BLOQUEIO POR SENHA (GATE) ============
-+import time, hmac, hashlib
-+
-+def _check_scrypt(pwd: str) -> bool:
-+    cfg = st.secrets.get("auth", {})
-+    salt_hex = cfg.get("salt", "")
-+    hash_hex = cfg.get("password_scrypt", "")
-+    if not salt_hex or not hash_hex:
-+        return False
-+    try:
-+        calc = hashlib.scrypt(
-+            pwd.encode("utf-8"),
-+            salt=bytes.fromhex(salt_hex),
-+            n=2**14, r=8, p=1
-+        ).hex()
-+        return hmac.compare_digest(calc, hash_hex)
-+    except Exception:
-+        return False
-+
-+def require_password(app_name: str = "App protegido"):
-+    # pequeno anti-bruteforce com backoff progressivo
-+    st.session_state.setdefault("_auth_ok", False)
-+    st.session_state.setdefault("_auth_attempts", 0)
-+    st.session_state.setdefault("_auth_block_until", 0.0)
-+
-+    now = time.time()
-+    if now < st.session_state["_auth_block_until"]:
-+        wait = int(st.session_state["_auth_block_until"] - now)
-+        st.error(f"Tentativas excessivas. Tente novamente em {wait}s.")
-+        st.stop()
-+
-+    if st.session_state["_auth_ok"]:
-+        with st.sidebar:
-+            if st.button("Sair"):
-+                for k in ["_auth_ok","_auth_attempts","_auth_block_until"]:
-+                    st.session_state.pop(k, None)
-+                st.rerun()
-+        return
-+
-+    st.title(f"🔒 {app_name}")
-+    pwd = st.text_input("Senha", type="password")
-+    if st.button("Entrar"):
-+        if _check_scrypt(pwd):
-+            st.session_state["_auth_ok"] = True
-+            st.session_state["_auth_attempts"] = 0
-+            st.success("Acesso liberado.")
-+            st.rerun()
-+        else:
-+            st.session_state["_auth_attempts"] += 1
-+            backoff = 5 * (3 ** max(0, st.session_state["_auth_attempts"] - 1))  # 5s,15s,45s...
-+            st.session_state["_auth_block_until"] = time.time() + backoff
-+            st.error("Senha incorreta.")
-+            st.stop()
-+# ====================================================
-+
- # --- imports principais ---
- try:
-     from core.service import gerar_resposta
- except Exception as e:
-     st.error(f"Falha ao importar core.service: {e}")
-     raise
-@@
--# ---------- página ----------
--st.set_page_config(page_title="Roleplay | Mary Massariol", layout="centered")
--st.title("Roleplay | Mary Massariol")
-+# ---------- página ----------
-+st.set_page_config(page_title="Roleplay | Mary Massariol", layout="centered")
-+require_password("Roleplay | Mary Massariol")  # <<< BLOQUEIO ATIVO AQUI
-+st.title("Roleplay | Mary Massariol")
-#############################################
+# ---------- página ----------
+st.set_page_config(page_title="Roleplay | Mary Massariol", layout="centered")
+require_password("Roleplay | Mary Massariol")   # <<< BLOQUEIO AQUI
+st.title("Roleplay | Mary Massariol")
 
 # ---------- Repositório (com fallbacks que NÃO quebram a UI) ----------
 def _noop(*_a, **_k):
