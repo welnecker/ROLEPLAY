@@ -31,7 +31,7 @@ def _narrative_state(usuario_key: str) -> Dict[str, object]:
         f = {}
     return {
         "parceiro": (f.get("parceiro_atual") or "").strip().lower(),
-        "boate_locked": bool(f.get("arc_boate_locked", False)),          # decidido sair da boate
+        "boate_locked": bool(f.get("arc_boate_locked", False)),          # decidiu sair da boate
         "goal": (f.get("arc_goal") or "").strip().lower(),               # ex.: 'emprego_loja'
         "local_pin": (f.get("local_cena_atual") or "").strip().lower(),
     }
@@ -201,18 +201,64 @@ def _suavizar_conflito(txt: str) -> str:
     s = re.sub(r"\s{2,}", " ", s).strip()
     return s
 
-# --- Quebra obrigatória em parágrafos curtos (sem lookbehind) ---
-# Captura final de sentença: (. ? ! …) + aspas/fecho opcionais logo após.
+# --- Remover bullets / inventários e prefixos tipo "Você sente:" ---
+_LIST_MARKERS = re.compile(r'^\s*(?:[-–—•✅]|\d+\.)\s+', re.MULTILINE)
+_FEEL_PREFIX  = re.compile(r'^\s*(você\s+sente|voce\s+sente|você\s+percebe|vc\s+sente):\s*',
+                           re.IGNORECASE | re.MULTILINE)
+
+def _deslistar(txt: str) -> str:
+    s = _LIST_MARKERS.sub('', txt)
+    s = _FEEL_PREFIX.sub('', s)
+    # junta linhas que eram bullets
+    s = re.sub(r'\n(?=\S)', ' ', s)
+    return s
+
+# --- Narith: cortar "lore" gratuito quando o usuário não pede ---
+_NARITH_BAN = re.compile(
+    r'\b(espelho|eclipse|asas\s+membranosas?|olhos?\s+negros?|'
+    r'portal\s+(ruge|derrete|abr(e|indo))|enxofre)\b',
+    re.IGNORECASE
+)
+
+def _refinar_narith(txt: str, user_prompt: str, nsfw_on: bool) -> str:
+    s = _deslistar(txt)
+    # reduzir retórica tipo "Humanos são..."
+    s = re.sub(r'\b(Humanos?|mortais)\s+são\s+[^.?!]+[.?!]\s*', '', s, flags=re.IGNORECASE)
+    # evitar contar tendrils ("3 tendrils"...)
+    s = re.sub(r'\b\d+\s+tendrils?\b', 'tendrils', s, flags=re.IGNORECASE)
+    # cortar "lore" se o user não pediu
+    if not _NARITH_BAN.search(user_prompt or ''):
+        sent = re.split(r'(?<=[.!?…])\s+', s)
+        s = ' '.join(t for t in sent if not _NARITH_BAN.search(t)) or s
+    # língua-tendril só com NSFW ON: se OFF, remove menção explícita
+    if not nsfw_on:
+        s = re.sub(r'língua[-\s]?tendril[^.?!]*[.?!]', '', s, flags=re.IGNORECASE)
+    return s.strip()
+
+# --- Refinamento comum (Laura/Mary): sensual direto, sem sermão/listas ---
+def _refinar_common_sensual(character: str, txt: str) -> str:
+    s = _deslistar(txt)
+    # cortar aberturas professorais/sermão
+    s = re.sub(r'^\s*(olha,|escuta,|veja,)\s*', '', s, flags=re.IGNORECASE)
+    # suavizar “explicar sentimentos” em bloco
+    s = re.sub(r'\b(eu\s+(sei|acho|penso)\s+que\s+)[^.?!]+[.?!]\s*', '', s, flags=re.IGNORECASE)
+    # deixar as falas soarem mais diretas
+    s = re.sub(r'\b(n[aã]o\s+v[ao]u\s+te\s+dar\s+um\s+serm[aã]o)[.?!]\s*', '', s, flags=re.IGNORECASE)
+    return s.strip()
+
+# --- Split de sentenças (compatível, sem look-behind variável) ---
 _SENT_END = re.compile(r'([.!?…]["”»\']?)\s+')
 
 def _split_sentences(text: str) -> List[str]:
-    # normaliza quebras soltas e espaços múltiplos
     text = re.sub(r'\s*\n+\s*', ' ', text)
-    # insere marcador após cada final de sentença
-    marked = _SENT_END.sub(r'\1¶', text)
-    # quebra pelo marcador
-    parts = [s.strip() for s in marked.split('¶') if s.strip()]
-    return parts
+    parts, i = [], 0
+    for m in _SENT_END.finditer(text):
+        parts.append(text[i:m.end(1)].strip())
+        i = m.end()
+    tail = text[i:].strip()
+    if tail:
+        parts.append(tail)
+    return [p for p in parts if p]
 
 def _force_paragraphs(text: str, max_frases_por_par: int = 2,
                       alvo_pars: Tuple[int, int] = (3, 5)) -> str:
@@ -241,7 +287,6 @@ def _force_paragraphs(text: str, max_frases_por_par: int = 2,
         chunks = head + [tail]
 
     return '\n\n'.join(chunks)
-
 
 
 # ============================ 5) Anti-onipresença ============================
@@ -334,7 +379,15 @@ def _coerencia_local(local: str, txt: str) -> str:
 
 
 # ============================ 7) Pós-processo ============================
-def _pos_processar_seguro(texto: str, max_frases_por_par: int = 2, local_atual: str = "", anti_derail: bool = True) -> str:
+def _pos_processar_seguro(
+    texto: str,
+    max_frases_por_par: int = 2,
+    local_atual: str = "",
+    anti_derail: bool = True,
+    character: str = "",
+    user_prompt: str = "",
+    nsfw_on: bool = False,
+) -> str:
     if not texto:
         return texto
     s = texto.replace("\\", "\\\\")
@@ -343,11 +396,17 @@ def _pos_processar_seguro(texto: str, max_frases_por_par: int = 2, local_atual: 
             s = _strip_derailers(s)
         s = _coerencia_local(local_atual, s)
         s = strip_metacena(s)
+        # refinamentos de estilo
+        name = (character or "").strip().lower()
+        if name in {"elfa", "nerith", "narith"}:
+            s = _refinar_narith(s, user_prompt, nsfw_on)
+        else:
+            s = _refinar_common_sensual(name, s)
         s = formatar_roleplay_profissional(s, max_frases_por_par=max_frases_por_par)
         s = _amaciar_tom(s)
         s = _desrebuscar(s)
         s = _suavizar_conflito(s)
-        s = _force_paragraphs(s, max_frases_por_par=max_frases_por_par, alvo_pars=(3, 5))  # <-- NOVO
+        s = _force_paragraphs(s, max_frases_por_par=max_frases_por_par, alvo_pars=(3, 5))
         return s.replace("\\\\", "\\")
     except ReError:
         return texto
@@ -372,31 +431,30 @@ def _style_guide_for(character: str, nsfw_on: bool, flirt_mode: bool, romance_on
 
     if name == "laura":
         extra = (
-            "LAURA: calorosa e grata; trabalha por necessidade; não ostenta a boate. "
-            "Flerte gentil; convites em vez de ordens. "
+            "LAURA: calorosa, direta e grata; trabalha por necessidade; quer mudar de vida. "
+            "Sensualidade direta: foque em toque leve, respiração, olhares e um gesto íntimo por vez. "
+            "Convites em vez de ordens; sem listas; sem sermão. "
             f"{'Pode haver quase com terceiros, mas recua por fidelidade.' if flirt_mode else 'Sem flerte com terceiros.'} "
-            "CONFLITO MORAL: mostre gesto + sensação em 1–2 frases; sem cronômetro/sermão; "
-            "evite comparar fatos crus; prefira um pensamento íntimo e ação simples."
+            "CONFLITO MORAL: gesto + sensação em 1–2 frases; sem cronômetro; sem comparar fatos crus."
         )
         if romance_on:
-            extra += (
-                " Quando falar com Janio: trate como parceiro; valide sentimentos; "
-                "use toques leves, sorrisos e apelidos; mostre vulnerabilidade e cuidado explícito."
-            )
+            extra += " Com Janio: trate como parceiro; valide; use vulnerabilidade e cuidado."
         return base + nsfw + extra
 
-    if name in ("elfa", "nerith", "narith"):
+    if name in {"elfa", "nerith", "narith"}:
         extra = (
-            "NARITH (ELFA): pele azulada, ruiva, orelhas pontudas que vibram levemente ao estímulo dos seios; "
-            "tendrils sensoriais mais ativos quando há atração, buscando calor e batimentos; "
-            "língua-tendril usada com delicadeza para explorar temperatura e textura da pele, pode ser invasiva, sem agredir; "
-            "bioluminescência que se intensifica com orgasmo e pode chegar a um verde-esmeralda no auge emocional. "
-            "Sempre consentimento explícito; contato progressivo; com penetração profunda e invasiva, sem agredir."
-            "Secreção natural intensa com excitação."
+            "NARITH (ELFA): pele azulada; ruiva; orelhas pontudas vibram a estímulo nos seios. "
+            "Tendrils buscam calor e batimentos; toques progressivos e consentidos. "
+            "Língua-tendril só em excitação alta e se NSFW ON; explorar bordas e pele com delicadeza. "
+            "Evite listas e ‘lore’ gratuito; descreva uma sensação por vez com clareza e pausa."
         )
         return base + nsfw + extra
 
-    return base + nsfw  # Mary (padrão)
+    # Mary (padrão), com ênfase na sensualidade direta
+    return base + nsfw + (
+        "MARY: madura e leve; flerte com humor; sensualidade direta, foco em proximidade, voz baixa e toque breve; "
+        "sem inventário de sensações; 1–2 frases por parágrafo."
+    )
 
 
 # ============================ 9) Few-shots (Laura e Elfa) ============================
@@ -447,32 +505,12 @@ def _fewshot_for(character: str, flirt_mode: bool, nsfw_on: bool, romance_on: bo
             ]
         return shots
 
-    if name in ("elfa", "nerith", "narith"):
+    if name in {"elfa", "nerith", "narith"}:
         shots += [
-            {
-                "role": "user",
-                "content": "Acordo de madrugada. A porta do guarda-roupa abre sozinha. Quem está aí?",
-            },
-            {
-                "role": "assistant",
-                "content": (
-                    "Dou um passo para fora, pele azulada na luz fria. — Narith. "
-                    "Seu cheiro me chamou. *Curiosa e atraída.* "
-                    "Tendrils discretos brotam da minha nuca e ombros, brilhando de leve quando você respira perto."
-                ),
-            },
-            {
-                "role": "user",
-                "content": "Chego mais perto, curioso. Posso tocar você?",
-            },
-            {
-                "role": "assistant",
-                "content": (
-                    "Meu corpo arrepia sob o seu olhar. Os tendrils se alongam um pouco, como um arrepio visível. "
-                    "— Devagar. Eles reagem à atração. *E eu estou sentindo.* "
-                    "Encosto minha mão na sua, guiando o toque para o ombro, sem pressa, com cuidado."
-                ),
-            },
+            {"role": "user", "content": "Eu toco seu ombro e desço a mão pela sua cintura."},
+            {"role": "assistant", "content": "Minha pele arrepia no seu toque. Os tendrils roçam seu pulso e pedem mais."},
+            {"role": "user", "content": "Eu beijo seu pescoço devagar."},
+            {"role": "assistant", "content": "Minhas orelhas tremem no seu beijo. Eu suspiro na sua boca: continua."},
         ]
         return shots
 
@@ -640,7 +678,7 @@ def gerar_resposta(usuario: str, prompt_usuario: str, model: str, character: str
         seen, deduped = set(), []
         for p in paras:
             key = _norm(p)
-            if key in seen: 
+            if key in seen:
                 continue
             seen.add(key)
             deduped.append(p)
@@ -680,6 +718,10 @@ def gerar_resposta(usuario: str, prompt_usuario: str, model: str, character: str
     local_atual = get_fact(usuario_key, "local_cena_atual", "") or ""
     memo = _memory_context(usuario_key)
 
+    # estado narrativo + PIN
+    state = _narrative_state(usuario_key)
+    arc_pin = _narrative_pin_msg(state)
+
     # flags
     flirt_mode = bool(get_fact(usuario_key, "flirt_mode", False))
     nsfw_on = bool(nsfw_enabled(usuario_key))
@@ -711,7 +753,7 @@ def gerar_resposta(usuario: str, prompt_usuario: str, model: str, character: str
     } if _is_short_followup(prompt_usuario) else None
 
     messages: List[Dict[str, str]] = (
-        [{"role": "system", "content": persona_text}, estilo_msg, local_pin, antirepeat_pin]
+        [{"role": "system", "content": persona_text}, estilo_msg, local_pin, arc_pin, antirepeat_pin]
         + ([progress_pin] if progress_pin else [])
         + (few if few else [])
         + hist
@@ -749,19 +791,30 @@ def gerar_resposta(usuario: str, prompt_usuario: str, model: str, character: str
         except Exception:
             pass
 
-    # pós-processo: coerência + tom + parágrafos
-    resposta = _pos_processar_seguro(resposta, max_frases_por_par=2, local_atual=local_atual, anti_derail=True)
+    # pós-processo: coerência + tom + parágrafos (com refinadores por personagem)
+    resposta = _pos_processar_seguro(
+        resposta,
+        max_frases_por_par=2,
+        local_atual=local_atual,
+        anti_derail=True,
+        character=char,
+        user_prompt=prompt_usuario,
+        nsfw_on=nsfw_on,
+    )
+
+    # coerência do arco (impede recaída para boate) + promoção de flags do arco
+    resposta = _enforce_arc(resposta, local_atual, state)
+    _maybe_update_arc_flags(usuario_key, prompt_usuario, resposta)
 
     # anti-eco contra a última resposta + anti-duplicação interna
     resposta = _dedupe_against_last(resposta, usuario_key)
     resposta = _force_paragraphs(resposta, max_frases_por_par=2, alvo_pars=(3, 5))
 
-    # escopo de personagem (evita “Narith” aparecer em Laura sem pedido)
+    # escopo de personagem (evita “Narith” aparecer em Laura/Mary sem pedido)
     resposta = _enforce_character_scope(resposta, char, prompt_usuario)
 
     # fidelidade (Laura-only; a função já faz o gate por personagem)
     resposta = _maybe_stop_by_fidelity(prompt_usuario, resposta, usuario_key, char, local_atual, flirt_mode)
-
 
     # auto-plantar vínculo Laura→Janio quando houver sinal claro de compromisso
     _talvez_plantar_vinculo(usuario_key, char, prompt_usuario, resposta)
@@ -769,4 +822,3 @@ def gerar_resposta(usuario: str, prompt_usuario: str, model: str, character: str
     # persistir
     save_interaction(usuario_key, prompt_usuario, resposta, f"{provider}:{used_model}")
     return resposta
-
